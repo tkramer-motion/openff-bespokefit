@@ -108,7 +108,7 @@ class FragmentationStage(_Stage):
     async def _enter(self, task: "CoordinatorTask"):
         settings = current_settings()
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
             raw_response = await client.post(
                 f"http://127.0.0.1:"
                 f"{settings.BEFLOW_GATEWAY_PORT}"
@@ -140,7 +140,7 @@ class FragmentationStage(_Stage):
 
         settings = current_settings()
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
             raw_response = await client.get(
                 f"http://127.0.0.1:"
                 f"{settings.BEFLOW_GATEWAY_PORT}"
@@ -386,7 +386,7 @@ class QCGenerationStage(_Stage):
 
         qc_calc_ids = defaultdict(set)
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
             for i, qc_tasks in target_qc_tasks.items():
                 for qc_task in qc_tasks:
                     raw_response = await client.post(
@@ -425,7 +425,7 @@ class QCGenerationStage(_Stage):
 
             return
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
             id_query = "&ids=".join(qc_id for i in self.ids for qc_id in self.ids[i])
 
             raw_response = await client.get(
@@ -541,7 +541,7 @@ class OptimizationStage(_Stage):
 
             return
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
             raw_response = await client.post(
                 f"http://127.0.0.1:"
                 f"{settings.BEFLOW_GATEWAY_PORT}"
@@ -568,7 +568,7 @@ class OptimizationStage(_Stage):
         if self.status == "errored":
             return
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0)) as client:
             raw_response = await client.get(
                 f"http://127.0.0.1:"
                 f"{settings.BEFLOW_GATEWAY_PORT}"

@@ -2,6 +2,14 @@ import asyncio
 import logging
 import time
 
+# Fix for OpenEye segfaults in forked processes
+try:
+    from openeye import oechem
+    if oechem.OEChemIsLicensed() and oechem.OEGetMemPoolMode() == oechem.OEMemPoolMode_Default:
+        oechem.OESetMemPoolMode(oechem.OEMemPoolMode_Mutexed | oechem.OEMemPoolMode_UnboundedCache)
+except (ImportError, ModuleNotFoundError):
+    pass
+
 import redis
 
 from openff.bespokefit.executor.services import current_settings

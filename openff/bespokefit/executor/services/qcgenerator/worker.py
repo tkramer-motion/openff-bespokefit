@@ -1,6 +1,14 @@
 import logging
 from typing import Any, Dict, List
 
+# Fix for OpenEye segfaults in forked processes
+try:
+    from openeye import oechem
+    if oechem.OEChemIsLicensed() and oechem.OEGetMemPoolMode() == oechem.OEMemPoolMode_Default:
+        oechem.OESetMemPoolMode(oechem.OEMemPoolMode_Mutexed | oechem.OEMemPoolMode_UnboundedCache)
+except (ImportError, ModuleNotFoundError):
+    pass
+
 import psutil
 import qcelemental
 import qcengine

@@ -1,5 +1,13 @@
 from typing import Union
 
+# Fix for OpenEye segfaults in forked processes
+try:
+    from openeye import oechem
+    if oechem.OEChemIsLicensed() and oechem.OEGetMemPoolMode() == oechem.OEMemPoolMode_Default:
+        oechem.OESetMemPoolMode(oechem.OEMemPoolMode_Mutexed | oechem.OEMemPoolMode_UnboundedCache)
+except (ImportError, ModuleNotFoundError):
+    pass
+
 from qcelemental.util import serialize
 
 from openff.bespokefit._pydantic import parse_raw_as
