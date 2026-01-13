@@ -13,7 +13,7 @@ from openff.bespokefit.executor.services import current_settings
 
 __REDIS_VERSION: int = 1
 __CONNECTION_POOL: Dict[
-    Tuple[str, int, Optional[int], Optional[str], bool], redis.Redis
+    Tuple[str, int, Optional[int], bool], redis.Redis
 ] = {}
 
 
@@ -44,22 +44,21 @@ def connect_to_default_redis(validate: bool = True) -> redis.Redis:
         host=settings.BEFLOW_REDIS_ADDRESS,
         port=settings.BEFLOW_REDIS_PORT,
         db=settings.BEFLOW_REDIS_DB,
-        password=settings.BEFLOW_REDIS_PASSWORD,
         validate=validate,
     )
 
 
 def connect_to_redis(
-    host: str, port: int, db: int, validate: bool = True, password: Optional[str] = None
+    host: str, port: int, db: int, validate: bool = True
 ) -> redis.Redis:
     """Connects to a redis server using the specified settings."""
 
-    connection_key = (host, port, db, password, validate)
+    connection_key = (host, port, db, validate)
 
     if connection_key in __CONNECTION_POOL:
         return __CONNECTION_POOL[connection_key]
 
-    connection = redis.Redis(host=host, port=port, db=db, password=password)
+    connection = redis.Redis(host=host, port=port, db=db)
 
     if validate:
         version = connection.get("openff-bespokefit:redis-version")
@@ -86,13 +85,13 @@ def connect_to_redis(
 
 
 def is_redis_available(
-    host: str, port: int = 6363, password: Optional[str] = None
+    host: str, port: int = 6363
 ) -> bool:
     """Returns whether a server running on the local host on a particular port is
     available.
     """
 
-    redis_client = redis.Redis(host=host, port=port, password=password)
+    redis_client = redis.Redis(host=host, port=port)
 
     try:
         redis_client.get("null")
@@ -133,7 +132,7 @@ def launch_redis(
         )
 
     if is_redis_available(
-        host="localhost", port=port, password=settings.BEFLOW_REDIS_PASSWORD
+        host="localhost", port=port
     ):
         raise RuntimeError(f"There is already a server running at localhost:{port}")
 
@@ -166,7 +165,7 @@ def launch_redis(
 
     for i in range(0, 60):
         if is_redis_available(
-            host="localhost", port=port, password=settings.BEFLOW_REDIS_PASSWORD
+            host="localhost", port=port
         ):
             timeout = False
             break
@@ -181,7 +180,6 @@ def launch_redis(
             host="localhost",
             port=port,
             db=settings.BEFLOW_REDIS_DB,
-            password=settings.BEFLOW_REDIS_PASSWORD,
             validate=True,
         )
     except RedisNotConfiguredError:
@@ -192,7 +190,6 @@ def launch_redis(
             host="localhost",
             port=port,
             db=settings.BEFLOW_REDIS_DB,
-            password=settings.BEFLOW_REDIS_PASSWORD,
             validate=False,
         )
         connection.set(

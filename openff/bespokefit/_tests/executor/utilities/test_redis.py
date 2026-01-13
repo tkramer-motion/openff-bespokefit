@@ -13,18 +13,18 @@ from openff.bespokefit.executor.utilities.redis import (
 
 def test_launch_redis(tmpdir, bespoke_settings):
     assert not is_redis_available(
-        host="localhost", port=1234, password=bespoke_settings.BEFLOW_REDIS_PASSWORD
+        host="localhost", port=1234
     )
 
     redis_process = launch_redis(port=1234, directory=str(tmpdir), persistent=True)
 
     try:
         assert is_redis_available(
-            host="localhost", port=1234, password=bespoke_settings.BEFLOW_REDIS_PASSWORD
+            host="localhost", port=1234
         )
 
         redis_connection = Redis(
-            host="localhost", port=1234, password=bespoke_settings.BEFLOW_REDIS_PASSWORD
+            host="localhost", port=1234
         )
 
         assert (
@@ -41,7 +41,7 @@ def test_launch_redis(tmpdir, bespoke_settings):
         redis_process.wait()
 
     assert not is_redis_available(
-        host="localhost", port=1234, password=bespoke_settings.BEFLOW_REDIS_PASSWORD
+        host="localhost", port=1234
     )
 
     assert os.path.isfile(os.path.join(tmpdir, "redis.db"))
@@ -49,12 +49,12 @@ def test_launch_redis(tmpdir, bespoke_settings):
 
 def test_launch_redis_already_exists(tmpdir, bespoke_settings):
     assert not is_redis_available(
-        host="localhost", port=1234, password=bespoke_settings.BEFLOW_REDIS_PASSWORD
+        host="localhost", port=1234
     )
 
     redis_process = launch_redis(port=1234, directory=str(tmpdir), persistent=True)
     assert is_redis_available(
-        host="localhost", port=1234, password=bespoke_settings.BEFLOW_REDIS_PASSWORD
+        host="localhost", port=1234
     )
 
     with pytest.raises(RuntimeError, match="here is already a server running"):
