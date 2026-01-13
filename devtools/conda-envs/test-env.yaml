@@ -1,4 +1,4 @@
-name: bespokefit-test
+name: base
 
 channels:
   - openeye
