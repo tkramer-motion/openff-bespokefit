@@ -21,7 +21,6 @@ dependencies:
   - click-option-group
   - rdkit =2024.03.5
   - openff-utilities
-  - openff-toolkit >=0.15
   - openff-forcefields >=2024.04.0
   - openff-units
   - openff-qcsubmit >=0.55
@@ -51,11 +50,4 @@ dependencies:
   - httpx
   - redis-server
   - redis-py
-
-    ### Testing
-
-  - pytest =7
-  - pytest-cov
-  - pytest-asyncio
-  - requests-mock
 
