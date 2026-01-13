@@ -345,7 +345,7 @@ def _update_from_qcsubmit_result(
 
     console.print(Padding("4. saving local cache", (1, 0, 1, 0)))
     # block until data is saved
-    redis_connection.save()
+    # redis_connection.save()
 
 
 update_cli = create_command(
