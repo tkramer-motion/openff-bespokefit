@@ -40,8 +40,8 @@ def configure_celery_app(
 
     celery_app = Celery(
         app_name,
-        backend=f"redis://@{redis_host_name}:{redis_port}/{redis_db}",
-        broker=f"redis://@{redis_host_name}:{redis_port}/{redis_db}",
+        backend=f"redis://{redis_host_name}:{redis_port}/{redis_db}",
+        broker=f"redis://{redis_host_name}:{redis_port}/{redis_db}",
         include=include,
     )
 
