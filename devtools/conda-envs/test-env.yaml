@@ -44,7 +44,7 @@ dependencies:
 
     # Executor
   - uvicorn
-  - fastapi <= 0.125.0
+  - fastapi = 0.115.12
   - starlette
   - celery
   - httpx
