@@ -34,6 +34,24 @@ _worker_task: Optional[asyncio.Future] = None
 
 __settings = current_settings()
 
+
+@router.get("/debug/coordinator")
+def get_coordinator_debug():
+    """Debug endpoint to check coordinator status."""
+    from fastapi.responses import JSONResponse
+    debug_info = dict(worker._debug_info)
+    debug_info["recent_errors"] = list(debug_info["recent_errors"])
+    debug_info["worker_task_done"] = _worker_task.done() if _worker_task else None
+    debug_info["worker_task_cancelled"] = _worker_task.cancelled() if _worker_task else None
+    if _worker_task and _worker_task.done() and not _worker_task.cancelled():
+        try:
+            _worker_task.result()
+            debug_info["worker_task_exception"] = None
+        except Exception as e:
+            import traceback
+            debug_info["worker_task_exception"] = {"type": type(e).__name__, "message": str(e), "traceback": traceback.format_exc()}
+    return JSONResponse(content=debug_info)
+
 __GET_TASK_IMAGE_ENDPOINT = (
     "/" + __settings.BEFLOW_COORDINATOR_PREFIX + "/{optimization_id}/image"
 )
@@ -100,7 +118,7 @@ def get_optimizations(
 
 
 @router.get("/" + __settings.BEFLOW_COORDINATOR_PREFIX + "/{optimization_id}")
-def get_optimization(optimization_id: int):
+def get_optimization(optimization_id: int) -> CoordinatorGETResponse:
     """Retrieves a bespoke optimization that has been submitted to this server
     using its unique id."""
 
@@ -108,19 +126,15 @@ def get_optimization(optimization_id: int):
         response = CoordinatorGETResponse.from_task(get_task(optimization_id))
     except IndexError:
         raise HTTPException(status_code=404, detail=f"{optimization_id} not found")
-    except Exception as e:
-        import traceback
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 
-    response_dict = response.dict(by_alias=True)
-    response_dict["_links"] = {
+    response.links = {
         "image": (
             __settings.BEFLOW_API_V1_STR
             + __GET_TASK_IMAGE_ENDPOINT.format(optimization_id=optimization_id)
         )
     }
 
-    return response_dict
+    return response
 
 
 @router.post("/" + __settings.BEFLOW_COORDINATOR_PREFIX)

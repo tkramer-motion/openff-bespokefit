@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import time
+import traceback
+from collections import deque
 
 # Fix for OpenEye segfaults in forked processes
 try:
@@ -24,6 +26,15 @@ from openff.bespokefit.executor.services.coordinator.storage import (
 )
 
 _logger = logging.getLogger(__name__)
+
+# Debug info storage
+_debug_info = {
+    "cycle_count": 0,
+    "last_cycle_time": None,
+    "last_error": None,
+    "recent_errors": deque(maxlen=10),
+    "tasks_processed": 0,
+}
 
 
 async def _process_task(task_id: int) -> bool:
@@ -72,6 +83,8 @@ async def cycle():  # pragma: no cover
 
         try:
             start_time = time.perf_counter()
+            _debug_info["cycle_count"] += 1
+            _debug_info["last_cycle_time"] = time.time()
 
             # First update any running tasks, pushing them to the 'complete' queue if
             # they have finished, so as to figure out how many new tasks can be moved
@@ -85,6 +98,7 @@ async def cycle():  # pragma: no cover
                     break
 
                 has_finished = await _process_task(task_id)
+                _debug_info["tasks_processed"] += 1
                 # Needed to let other async threads run even if there are hundreds of
                 # tasks running
                 await asyncio.sleep(0.0)
@@ -123,6 +137,9 @@ async def cycle():  # pragma: no cover
             redis.exceptions.BusyLoadingError,
         ) as e:
             n_connection_errors += 1
+            error_info = {"type": type(e).__name__, "message": str(e), "traceback": traceback.format_exc(), "time": time.time()}
+            _debug_info["last_error"] = error_info
+            _debug_info["recent_errors"].append(error_info)
 
             if n_connection_errors >= 3:
                 raise e
@@ -132,5 +149,11 @@ async def cycle():  # pragma: no cover
                     f"Failed to connect to Redis - {3 - n_connection_errors} attempts "
                     f"remaining."
                 )
+
+        except Exception as e:
+            error_info = {"type": type(e).__name__, "message": str(e), "traceback": traceback.format_exc(), "time": time.time()}
+            _debug_info["last_error"] = error_info
+            _debug_info["recent_errors"].append(error_info)
+            print(f"Coordinator error: {error_info}", flush=True)
 
         await asyncio.sleep(sleep_time)

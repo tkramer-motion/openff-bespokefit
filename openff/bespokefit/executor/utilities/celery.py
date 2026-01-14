@@ -1,5 +1,6 @@
 import json
 import multiprocessing
+import uuid
 from typing import Any, Dict, List, Optional
 
 from celery import Celery
@@ -55,12 +56,14 @@ def configure_celery_app(
 
 
 def _spawn_worker(celery_app, concurrency: int = 1, **kwargs):
+    # Generate unique hostname to avoid DuplicateNodenameWarning when running multiple workers
+    unique_id = uuid.uuid4().hex[:8]
     worker = celery_app.Worker(
         concurrency=concurrency,
         loglevel="INFO",
         logfile=f"celery-{celery_app.main}.log",
         quiet=True,
-        hostname=celery_app.main,
+        hostname=f"{celery_app.main}-{unique_id}",
         **kwargs,
     )
     worker.start()

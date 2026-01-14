@@ -66,20 +66,17 @@ def get_qc_results(
     if ids is None:
         raise NotImplementedError()
 
-    response = QCGeneratorGETPageResponse(
+    return QCGeneratorGETPageResponse(
         self="/" + __settings.BEFLOW_QC_COMPUTE_PREFIX,
         prev=None,
         next=None,
         contents=[_retrieve_qc_result(qc_calc_id, results) for qc_calc_id in ids],
     )
 
-    return response
-
 
 @router.get(__GET_ENDPOINT)
 def get_qc_result(qc_calc_id: str, results: bool = True) -> QCGeneratorGETResponse:
-    response = _retrieve_qc_result(qc_calc_id, results)
-    return response
+    return _retrieve_qc_result(qc_calc_id, results)
 
 
 @router.post("/" + __settings.BEFLOW_QC_COMPUTE_PREFIX)
