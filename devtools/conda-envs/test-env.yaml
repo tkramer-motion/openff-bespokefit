@@ -13,7 +13,7 @@ dependencies:
     ### Core dependencies.
 
   - numpy
-  - pydantic
+  - pydantic = 1.10.22
   - pyyaml
   - tqdm
   - rich
@@ -44,7 +44,7 @@ dependencies:
 
     # Executor
   - uvicorn
-  - fastapi = 0.115.12
+  - fastapi = 0.125.0
   - starlette
   - celery
   - httpx
