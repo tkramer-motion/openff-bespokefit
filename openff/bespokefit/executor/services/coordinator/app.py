@@ -100,7 +100,7 @@ def get_optimizations(
 
 
 @router.get("/" + __settings.BEFLOW_COORDINATOR_PREFIX + "/{optimization_id}")
-def get_optimization(optimization_id: int) -> CoordinatorGETResponse:
+def get_optimization(optimization_id: int):
     """Retrieves a bespoke optimization that has been submitted to this server
     using its unique id."""
 
@@ -112,14 +112,15 @@ def get_optimization(optimization_id: int) -> CoordinatorGETResponse:
         import traceback
         raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 
-    response.links = {
+    response_dict = response.dict(by_alias=True)
+    response_dict["_links"] = {
         "image": (
             __settings.BEFLOW_API_V1_STR
             + __GET_TASK_IMAGE_ENDPOINT.format(optimization_id=optimization_id)
         )
     }
 
-    return response
+    return response_dict
 
 
 @router.post("/" + __settings.BEFLOW_COORDINATOR_PREFIX)
