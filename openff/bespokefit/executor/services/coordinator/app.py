@@ -108,6 +108,9 @@ def get_optimization(optimization_id: int) -> CoordinatorGETResponse:
         response = CoordinatorGETResponse.from_task(get_task(optimization_id))
     except IndexError:
         raise HTTPException(status_code=404, detail=f"{optimization_id} not found")
+    except Exception as e:
+        import traceback
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {e}\n{traceback.format_exc()}")
 
     response.links = {
         "image": (
