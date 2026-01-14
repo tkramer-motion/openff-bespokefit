@@ -87,6 +87,9 @@ class CoordinatorGETResponse(Link):
         {}, description="Links to resources associated with the model.", alias="_links"
     )
 
+    class Config:
+        extra = "allow"
+
     @classmethod
     def from_task(cls, task: "CoordinatorTask"):
         settings = current_settings()
