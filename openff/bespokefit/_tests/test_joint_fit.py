@@ -227,3 +227,22 @@ def test_count_single_point_failures_handles_missing_data():
 
     assert count_single_point_failures([_Bare()]) == (0, 0, 0)
     assert count_single_point_failures([]) == (0, 0, 0)
+
+
+# --- skip-optimization flag (joint mode skips the per-molecule fit) ------------------
+
+
+def test_optimization_stage_skip_optimization_round_trip():
+    pytest.importorskip("openff.toolkit")
+    from openff.bespokefit.schema.fitting import OptimizationStageSchema
+    from openff.bespokefit.schema.optimizers import ForceBalanceSchema
+
+    stage = OptimizationStageSchema(
+        optimizer=ForceBalanceSchema(),
+        parameters=[],
+        parameter_hyperparameters=[],
+    )
+    assert stage.skip_optimization is False  # default preserves existing behavior
+
+    stage.skip_optimization = True
+    assert OptimizationStageSchema.parse_raw(stage.json()).skip_optimization is True

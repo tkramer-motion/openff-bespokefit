@@ -50,9 +50,10 @@ def optimize(self, optimization_input_json: str) -> str:
     with temporary_cd(input_schema.id):
         for i, stage in enumerate(input_schema.stages):
             optimizer = get_optimizer(stage.optimizer.type)
-            # If there are no parameters to optimise as they have all been cached mock
-            # the result
-            if not stage.parameters:
+            # Mock the result (return the input force field unchanged) if there are no
+            # parameters to optimise (e.g. all cached) or the stage is explicitly marked
+            # to skip optimization (e.g. a joint fit over the series is run separately).
+            if not stage.parameters or stage.skip_optimization:
                 result = OptimizationStageResults(
                     provenance={"skipped": True},
                     status="success",

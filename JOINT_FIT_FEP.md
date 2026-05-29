@@ -87,7 +87,7 @@ openff-bespoke executor run-series \
   --joint \
   --file ligands.sdf \
   --workflow default \
-  --default-qc-spec xtb gfn2xtb none \
+  --default-qc-spec xtb gfn2xtb none or --default-qc-spec torchani ani2x none \
   --single-point-qc-spec psi4 b3lyp-d3bj dzvp \
   --base-tmd-ff project_base.py \
   --output bespoke_tmd_ff.py \
@@ -154,7 +154,7 @@ single points.
 |`--qc-compute-n-cores`|Cores per QC worker. Total cores ≈ workers × cores.|
 |`--qc-compute-max-mem`|GB per core per QC worker.|
 |`--n-fragmenter-workers`|Parallel fragmentation workers.|
-|`--n-optimizer-workers`|Parallel per-molecule fits (see caveat below).|
+|`--n-optimizer-workers`|Parallel per-molecule fits (`--per-molecule` only; skipped in `--joint`).|
 
 **Phase B — the joint ForceBalance fit (executor shut down).** One ForceBalance process,
 parallelized internally:
@@ -211,7 +211,7 @@ mismatch.
 1. Each molecule is submitted to the executor with **broad SMIRKS**
    (`generate_bespoke_terms=False`), so the molecules share the base force field's generic
    torsion patterns. The executor generates (and caches) the xTB drives + DFT single
-   points and runs a per-molecule fit.
+   points; the per-molecule fit is **skipped** (mocked) so only the QC is produced.
 2. For the joint fit, each completed result carries its populated QC reference data; these
    are pooled into a single ForceBalance optimization whose **parameters** are the
    de-duplicated shared SMIRKS and whose **targets** are every molecule's torsion profile.
@@ -255,11 +255,11 @@ more robust functional/basis or SCF settings.
 
 ## Caveats
 
-- **Redundant per-molecule fits.** In `--joint` mode the executor still runs a (discarded)
-  per-molecule ForceBalance fit for each molecule — that is how the generated QC reference
-  data is produced and returned for pooling. `--n-optimizer-workers` parallelizes those;
-  the *real* fit is the single joint one, parallelized by `--forcebalance-workers`. The QC
-  drives dominate cost, so this overhead is usually minor.
+- **No per-molecule fit in joint mode.** In `--joint` mode the per-molecule ForceBalance
+  fit is **skipped** (mocked) — the executor only generates the QC, and a single joint fit
+  over the whole series (parallelized by `--forcebalance-workers`) does the actual
+  optimization. `--n-optimizer-workers` therefore has little effect with `--joint`; it
+  matters for `--per-molecule` runs.
 - **Validate on a few ligands first.** Run on 2–3 ligands and check the
   "overrode N / appended M" line and that the output loads in Timemachine before launching
   the full map.

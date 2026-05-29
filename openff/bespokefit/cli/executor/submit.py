@@ -237,7 +237,16 @@ def _to_input_schema(
         )
 
     else:
-        return workflow_factory.optimization_schema_from_molecule(molecule)
+        schema = workflow_factory.optimization_schema_from_molecule(molecule)
+
+        if broad_smirks:
+            # Joint mode: skip the per-molecule fit. The executor still generates the QC
+            # (and the broad SMIRKS + reference data are retained on the result); a single
+            # joint fit over the whole series does the actual optimization.
+            for stage in schema.stages:
+                stage.skip_optimization = True
+
+        return schema
 
 
 def _submit(

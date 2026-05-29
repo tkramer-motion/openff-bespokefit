@@ -52,6 +52,14 @@ class OptimizationStageSchema(SchemaBase, abc.ABC):
         description="The fittings targets to simultaneously optimize against.",
     )
 
+    skip_optimization: bool = Field(
+        False,
+        description="If set, the optimizer mocks this stage (returning the input force "
+        "field unchanged) instead of running it. Used to generate the QC reference data "
+        "for a stage without paying for its fit, e.g. when a single joint fit over a "
+        "whole series will be run separately.",
+    )
+
     @property
     def n_targets(self) -> int:
         """Returns the number of targets to be fit."""
