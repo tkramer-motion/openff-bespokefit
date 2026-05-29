@@ -478,12 +478,8 @@ def redis_session(tmpdir_factory):
         "It looks like a redis server is already running with the test "
         "settings. Exiting early in-case this is a production redis server."
     )
-    settings = current_settings()
-
     try:
-        connection = redis.Redis(
-            port=5678, db=0, password=settings.BEFLOW_REDIS_PASSWORD
-        )
+        connection = redis.Redis(port=5678, db=0)
 
         keys = connection.keys("*")
         assert len(keys) == 0
@@ -506,8 +502,7 @@ def redis_session(tmpdir_factory):
 
 @pytest.fixture(scope="session")
 def redis_connection(redis_session) -> redis.Redis:
-    settings = current_settings()
-    return redis.Redis(port=5678, db=0, password=settings.BEFLOW_REDIS_PASSWORD)
+    return redis.Redis(port=5678, db=0)
 
 
 @pytest.fixture(scope="function", autouse=True)

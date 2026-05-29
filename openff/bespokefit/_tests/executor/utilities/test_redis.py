@@ -11,7 +11,7 @@ from openff.bespokefit.executor.utilities.redis import (
 )
 
 
-def test_launch_redis(tmpdir, bespoke_settings):
+def test_launch_redis(tmpdir):
     assert not is_redis_available(
         host="localhost", port=1234
     )
@@ -47,7 +47,7 @@ def test_launch_redis(tmpdir, bespoke_settings):
     assert os.path.isfile(os.path.join(tmpdir, "redis.db"))
 
 
-def test_launch_redis_already_exists(tmpdir, bespoke_settings):
+def test_launch_redis_already_exists(tmpdir):
     assert not is_redis_available(
         host="localhost", port=1234
     )
@@ -64,7 +64,7 @@ def test_launch_redis_already_exists(tmpdir, bespoke_settings):
     redis_process.wait()
 
     assert not is_redis_available(
-        host="localhost", port=1234, password=bespoke_settings.BEFLOW_REDIS_PASSWORD
+        host="localhost", port=1234
     )
 
 

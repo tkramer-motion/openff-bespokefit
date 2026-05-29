@@ -35,7 +35,7 @@ def expected_redis_config_version() -> int:
 
 def connect_to_default_redis(validate: bool = True) -> redis.Redis:
     """Connects to a redis server using the settings defined by the
-    `BEFLOW_REDIS_ADDRESS`, `BEFLOW_REDIS_PORT`, `BEFLOW_REDIS_DB` and `BEFLOW_REDIS_PASSWORD` settings.
+    `BEFLOW_REDIS_ADDRESS`, `BEFLOW_REDIS_PORT` and `BEFLOW_REDIS_DB` settings.
     """
 
     settings = current_settings()
@@ -140,8 +140,9 @@ def launch_redis(
         "redis.db" if not directory else os.path.join(directory, "redis.db")
     )
 
-    # to allow connections from other machines we need a default user password
-    redis_command = f"redis-server --port {str(port)} --dbfilename redis.db --requirepass {settings.BEFLOW_REDIS_PASSWORD}"
+    # No auth: this fork runs Redis unauthenticated behind a firewall. protected-mode
+    # is disabled so workers on other machines can still connect without a password.
+    redis_command = f"redis-server --port {str(port)} --dbfilename redis.db --protected-mode no"
 
     if directory:
         redis_command = f"{redis_command} --dir {directory}"
