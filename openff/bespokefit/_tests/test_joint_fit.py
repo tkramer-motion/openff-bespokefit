@@ -11,6 +11,7 @@ import pytest
 from openff.bespokefit import _joint_fit
 from openff.bespokefit._joint_fit import (
     _find_free_port,
+    count_single_point_failures,
     enable_work_queue,
     pool_parameters_and_targets,
     work_queue_workers,
@@ -161,3 +162,68 @@ def test_work_queue_workers_requires_cctools(monkeypatch):
     with pytest.raises(RuntimeError, match="cctools"):
         with work_queue_workers(2, 9999):
             pass
+
+
+# --- single-point failure summary ---------------------------------------------------
+
+
+class _SPRecord:
+    def __init__(self, n_failed, n_total):
+        self.extras = {
+            "bespokefit_single_point_failures": {
+                "n_failed": n_failed,
+                "n_total": n_total,
+            }
+        }
+
+
+class _SPRef:
+    def __init__(self, records):
+        self.qc_records = records
+
+
+class _SPTarget:
+    def __init__(self, ref):
+        self.reference_data = ref
+
+
+class _SPStage:
+    def __init__(self, targets):
+        self.targets = targets
+
+
+class _SPSchema:
+    def __init__(self, stages):
+        self.stages = stages
+
+
+class _SPResults:
+    def __init__(self, schema):
+        self.input_schema = schema
+
+
+class _SPOutput:
+    def __init__(self, results):
+        self.results = results
+
+
+def _output_with(drive_failures):
+    records = [_SPRecord(failed, total) for failed, total in drive_failures]
+    return _SPOutput(_SPResults(_SPSchema([_SPStage([_SPTarget(_SPRef(records))])])))
+
+
+def test_count_single_point_failures_totals():
+    outputs = [
+        _output_with([(2, 24), (0, 24)]),  # one drive failed 2, one clean
+        _output_with([(1, 24)]),  # one drive failed 1
+    ]
+    # 3 failed of 72 attempted across 2 drives that had failures
+    assert count_single_point_failures(outputs) == (3, 72, 2)
+
+
+def test_count_single_point_failures_handles_missing_data():
+    class _Bare:
+        results = None
+
+    assert count_single_point_failures([_Bare()]) == (0, 0, 0)
+    assert count_single_point_failures([]) == (0, 0, 0)

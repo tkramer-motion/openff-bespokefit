@@ -1,4 +1,5 @@
 import logging
+import math
 from typing import Any, Dict, List
 
 # Fix for OpenEye segfaults in forked processes
@@ -88,6 +89,12 @@ def _get_program_keywords(program: str) -> Dict[str, str]:
     return keywords
 
 
+# A molecule's torsion profile is dropped only if fewer than this fraction of its grid
+# points produce a converged single-point energy; otherwise the failed points are simply
+# dropped from the profile.
+_MIN_SINGLE_POINT_CONVERGED_FRACTION = 0.5
+
+
 def _single_point_torsion_energies(
     task: Torsion1DTask, td_result: TorsionDriveResult
 ) -> TorsionDriveResult:
@@ -96,15 +103,25 @@ def _single_point_torsion_energies(
     The geometries optimized during the drive (e.g. with xTB) are retained while each
     grid energy is replaced by a single-point energy computed with
     ``task.single_point_spec`` (e.g. DFT).
+
+    Single points are computed per grid point and are *fault tolerant*: a grid point whose
+    single point fails to converge is dropped (from both the energies and the geometries)
+    with a warning, rather than failing the whole drive. The molecule is only failed if
+    fewer than ``_MIN_SINGLE_POINT_CONVERGED_FRACTION`` of its grid points converge. The
+    number of dropped points is recorded in the result's ``extras`` so the caller can
+    report a summary.
     """
     spec = task.single_point_spec
+    n_points = len(td_result.final_molecules)
 
     _task_logger.info(
         f"computing single-point energies at {spec.program}/{spec.model.method} "
-        f"for {len(td_result.final_molecules)} grid points"
+        f"for {n_points} grid points"
     )
 
     final_energies = {}
+    final_molecules = {}
+    failed_grid_ids = []
 
     for grid_id, qc_molecule in td_result.final_molecules.items():
         single_point = qcengine.compute(
@@ -115,14 +132,49 @@ def _single_point_torsion_energies(
                 keywords=_get_program_keywords(spec.program),
             ),
             spec.program,
-            raise_error=True,
+            raise_error=False,
             task_config=_task_config(),
         )
-        final_energies[grid_id] = float(single_point.return_result)
+
+        if getattr(single_point, "success", False):
+            final_energies[grid_id] = float(single_point.return_result)
+            final_molecules[grid_id] = qc_molecule
+        else:
+            failed_grid_ids.append(grid_id)
+            error = getattr(single_point, "error", None)
+            _task_logger.warning(
+                f"single-point energy failed at grid point {grid_id}: "
+                f"{getattr(error, 'error_message', error)}"
+            )
+
+    n_failed = len(failed_grid_ids)
+    n_converged = len(final_energies)
+
+    if n_failed:
+        _task_logger.warning(
+            f"{n_failed}/{n_points} single-point energies failed to converge at "
+            f"{spec.program}/{spec.model.method} and were dropped"
+        )
+
+    if n_converged < max(2, math.ceil(_MIN_SINGLE_POINT_CONVERGED_FRACTION * n_points)):
+        raise RuntimeError(
+            f"only {n_converged}/{n_points} single-point energies converged at "
+            f"{spec.program}/{spec.model.method} (below 50%); too few to build a torsion "
+            f"profile for this molecule."
+        )
+
+    extras = dict(td_result.extras or {})
+    extras["bespokefit_single_point_failures"] = {
+        "n_failed": n_failed,
+        "n_total": n_points,
+        "failed_grid_ids": [str(grid_id) for grid_id in failed_grid_ids],
+    }
 
     return TorsionDriveResult(
-        **td_result.dict(exclude={"final_energies"}),
+        **td_result.dict(exclude={"final_energies", "final_molecules", "extras"}),
+        extras=extras,
         final_energies=final_energies,
+        final_molecules=final_molecules,
     )
 
 

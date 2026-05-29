@@ -221,6 +221,38 @@ mismatch.
 
 ---
 
+## When a DFT single point fails to converge
+
+Single-point energies are computed **per grid point and are fault tolerant**. If a grid
+point's DFT single point fails to converge:
+
+- that grid point is **dropped** from the torsion profile (both its energy and geometry),
+  with a warning logged by the QC worker — the rest of the drive is kept;
+- the molecule is only **failed entirely** if fewer than **50%** of its grid points
+  converge (a signal that something is systematically wrong for that molecule);
+- a failed molecule is skipped (and, in `--per-molecule` mode, simply omitted from the
+  merge; in `--joint` mode, omitted from the pooled fit). If *every* molecule fails the
+  run aborts.
+
+At the end of the run you get a single summary totalling the dropped points across the
+whole series, e.g.:
+
+```
+! single-point summary: 7/168 DFT single points failed to converge and were dropped, across 4 torsion drive(s)
+```
+
+or, when everything converged:
+
+```
+✓ single-point summary: all 168 DFT single points converged
+```
+
+A handful of dropped points is normal and harmless (ForceBalance fits whatever grid
+points are present). A large number, or dropped molecules, is worth investigating — try a
+more robust functional/basis or SCF settings.
+
+---
+
 ## Caveats
 
 - **Redundant per-molecule fits.** In `--joint` mode the executor still runs a (discarded)

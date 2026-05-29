@@ -63,6 +63,7 @@ def _run_series_cli(
 
     from openff.toolkit import ForceField
 
+    from openff.bespokefit._joint_fit import count_single_point_failures
     from openff.bespokefit._tmd import (
         collect_fitted_torsions,
         load_tmd_force_field,
@@ -309,6 +310,22 @@ def _run_series_cli(
             (1, 0, 1, 0),
         )
     )
+
+    # End-of-run summary of any DFT single points that failed to converge and were
+    # dropped (only relevant when --single-point-qc-spec was used).
+    n_sp_failed, n_sp_total, n_sp_drives = count_single_point_failures(successful_outputs)
+    if n_sp_total:
+        if n_sp_failed:
+            console.print(
+                f"[[yellow]![/yellow]] single-point summary: [blue]{n_sp_failed}[/blue]"
+                f"/[blue]{n_sp_total}[/blue] DFT single points failed to converge and "
+                f"were dropped, across [blue]{n_sp_drives}[/blue] torsion drive(s)"
+            )
+        else:
+            console.print(
+                f"[[green]✓[/green]] single-point summary: all [blue]{n_sp_total}[/blue]"
+                f" DFT single points converged"
+            )
 
 
 __run_series_options = [

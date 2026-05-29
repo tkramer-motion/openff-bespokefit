@@ -70,6 +70,41 @@ def pool_parameters_and_targets(stages) -> Tuple[list, list]:
     return parameters, targets
 
 
+def count_single_point_failures(outputs) -> Tuple[int, int, int]:
+    """Total the DFT single-point energies that failed to converge (and were dropped)
+    across a series of completed bespoke results.
+
+    Returns ``(n_failed, n_total, n_affected_drives)``, read from the per-drive failure
+    record the QC worker stamps into each ``TorsionDriveResult``'s ``extras``. Works for
+    both per-molecule and joint runs, and returns zeros when no single-point spec was
+    used.
+    """
+    n_failed = n_total = n_affected = 0
+
+    for output in outputs:
+        results = getattr(output, "results", None)
+        schema = getattr(results, "input_schema", None) if results is not None else None
+        if schema is None:
+            continue
+
+        for stage in schema.stages:
+            for target in stage.targets:
+                reference_data = getattr(target, "reference_data", None)
+                for record in getattr(reference_data, "qc_records", None) or []:
+                    info = (getattr(record, "extras", None) or {}).get(
+                        "bespokefit_single_point_failures"
+                    )
+                    if not info:
+                        continue
+                    n_total += info.get("n_total", 0)
+                    failed = info.get("n_failed", 0)
+                    n_failed += failed
+                    if failed:
+                        n_affected += 1
+
+    return n_failed, n_total, n_affected
+
+
 def build_joint_stage(per_molecule_schemas: List):
     """Build a single ``OptimizationStageSchema`` that fits shared parameters against the
     pooled targets of every per-molecule schema (using each schema's final stage).
