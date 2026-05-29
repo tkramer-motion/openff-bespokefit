@@ -320,3 +320,48 @@ def test_select_qc_spec():
 
     factory = BespokeWorkflowFactory(default_qc_specs=[default_qc_spec])
     assert factory._select_qc_spec(Molecule.from_smiles("C")) == default_qc_spec
+
+
+def test_single_point_spec_populates_torsion_target():
+    """When a single-point spec is configured the torsion target's calculation
+    specification should carry it (drive cheap, single-point expensive)."""
+    factory = BespokeWorkflowFactory(
+        optimizer=ForceBalanceSchema(),
+        default_qc_specs=[QCSpec(program="rdkit", method="uff", basis=None)],
+        default_qc_single_point_spec=QCSpec(
+            program="psi4", method="B3LYP-D3BJ", basis="DZVP"
+        ),
+    )
+
+    schema = factory.optimization_schema_from_molecule(Molecule.from_smiles("CCO"))
+
+    torsion_targets = [
+        target
+        for stage in schema.stages
+        for target in stage.targets
+        if target.bespoke_task_type() == "torsion1d"
+    ]
+    assert len(torsion_targets) >= 1
+
+    for target in torsion_targets:
+        single_point_spec = target.calculation_specification.single_point_spec
+        assert single_point_spec is not None
+        # specs are lower-cased to improve cache hit rates
+        assert single_point_spec.program == "psi4"
+        assert single_point_spec.model.method == "b3lyp-d3bj"
+        assert single_point_spec.model.basis == "dzvp"
+
+
+def test_single_point_spec_absent_by_default():
+    """Without a single-point spec the torsion target must behave exactly as before."""
+    factory = BespokeWorkflowFactory(
+        optimizer=ForceBalanceSchema(),
+        default_qc_specs=[QCSpec(program="rdkit", method="uff", basis=None)],
+    )
+
+    schema = factory.optimization_schema_from_molecule(Molecule.from_smiles("CCO"))
+
+    for stage in schema.stages:
+        for target in stage.targets:
+            if target.bespoke_task_type() == "torsion1d":
+                assert target.calculation_specification.single_point_spec is None

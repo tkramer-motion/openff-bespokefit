@@ -88,6 +88,17 @@ def submit_options(allow_multiple_molecules: bool = False):
             "then 'none' should be specified.",
             required=False,
         ),
+        optgroup.option(
+            "--single-point-qc-spec",
+            type=(str, str, str),
+            help="An optional program, method, and basis used to compute single-point "
+            "energies for each torsion drive grid geometry, e.g. "
+            "`--single-point-qc-spec psi4 b3lyp-d3bj dzvp`. When provided, torsion "
+            "drives are optimized using `--default-qc-spec` (e.g. xTB) and the grid "
+            "energies are replaced by single-point energies at this specification. "
+            "Specify 'none' for the basis if not required.",
+            required=False,
+        ),
     ]
 
 
@@ -97,6 +108,7 @@ def _to_input_schema(
     force_field_path: Optional[str],
     target_torsion_smirks: Tuple[str],
     default_qc_spec: Optional[Tuple[str, str, str]],
+    single_point_qc_spec: Optional[Tuple[str, str, str]],
     workflow_name: Optional[str],
     workflow_file_name: Optional[str],
 ) -> "BespokeOptimizationSchema":
@@ -145,6 +157,18 @@ def _to_input_schema(
                     spec_description="CLI provided spec",
                 )
             ]
+        if single_point_qc_spec is not None:
+            program, method, basis = single_point_qc_spec
+
+            if basis.lower() == "none":
+                basis = None
+
+            workflow_factory.default_qc_single_point_spec = QCSpec(
+                program=program,
+                method=method,
+                basis=basis,
+                spec_description="CLI provided single-point spec",
+            )
 
     except FileNotFoundError:
         exit_with_messages(
@@ -193,6 +217,7 @@ def _submit(
     force_field_path: Optional[str],
     target_torsion_smirks: Tuple[str],
     default_qc_spec: Optional[Tuple[str, str, str]],
+    single_point_qc_spec: Optional[Tuple[str, str, str]],
     workflow_name: Optional[str],
     workflow_file_name: Optional[str],
     allow_multiple_molecules: bool,
@@ -261,6 +286,7 @@ def _submit(
                 force_field_path,
                 target_torsion_smirks,
                 default_qc_spec,
+                single_point_qc_spec,
                 workflow_name,
                 workflow_file_name,
             )
@@ -327,6 +353,7 @@ def _submit_cli(
     force_field_path: Optional[List[str]],
     target_torsion_smirks: Tuple[str],
     default_qc_spec: Optional[Tuple[str, str, str]],
+    single_point_qc_spec: Optional[Tuple[str, str, str]],
     workflow_name: Optional[str],
     workflow_file_name: Optional[str],
     save_submission: bool,
@@ -346,6 +373,7 @@ def _submit_cli(
             force_field_path=force_field_path,
             target_torsion_smirks=target_torsion_smirks,
             default_qc_spec=default_qc_spec,
+            single_point_qc_spec=single_point_qc_spec,
             workflow_name=workflow_name,
             workflow_file_name=workflow_file_name,
             allow_multiple_molecules=True,

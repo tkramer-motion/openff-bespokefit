@@ -51,6 +51,7 @@ from openff.bespokefit.schema.targets import (
 from openff.bespokefit.schema.tasks import (
     HessianTaskSpec,
     OptimizationTaskSpec,
+    SinglePointSpec,
     Torsion1DTaskSpec,
 )
 from openff.bespokefit.utilities import parallel
@@ -131,6 +132,14 @@ class BespokeWorkflowFactory(ClassBase):
         "will be considered in order until one is found that i) is available based on "
         "the installed dependencies, and ii) is compatible with the molecule of "
         "interest.",
+    )
+
+    default_qc_single_point_spec: Optional[QCSpec] = Field(
+        None,
+        description="An optional higher level of theory (e.g. DFT) at which to compute "
+        "single-point energies for each torsion drive grid geometry. When set, torsion "
+        "drives are optimized using `default_qc_specs` (e.g. xTB) and the grid energies "
+        "are replaced by single-point energies computed at this specification.",
     )
 
     @validator("initial_force_field")
@@ -468,6 +477,28 @@ class BespokeWorkflowFactory(ClassBase):
                     ),
                 ),
             )
+
+            if (
+                task_type == "torsion1d"
+                and self.default_qc_single_point_spec is not None
+            ):
+                sp_spec = self.default_qc_single_point_spec
+                target_specification = target_specification.copy(
+                    update={
+                        "single_point_spec": SinglePointSpec(
+                            program=sp_spec.program.lower(),
+                            model=Model(
+                                method=sp_spec.method.lower(),
+                                basis=(
+                                    sp_spec.basis.lower()
+                                    if sp_spec.basis is not None
+                                    else sp_spec.basis
+                                ),
+                            ),
+                        )
+                    }
+                )
+
             # only overwrite with general settings if not configured
             if target_schema.calculation_specification is None:
                 target_schema.calculation_specification = target_specification

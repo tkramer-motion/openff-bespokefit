@@ -53,6 +53,18 @@ class OptimizationTask(OptimizationTaskSpec):
     )
 
 
+class SinglePointSpec(BaseModel):
+    """A specification for a single-point energy evaluation used to re-evaluate the
+    energies of geometries produced by a (typically cheaper) torsion drive."""
+
+    program: str = Field(
+        ..., description="The program to use to evaluate the single-point energy."
+    )
+    model: Model = Field(
+        ..., description="The method and basis to use for the single-point energy."
+    )
+
+
 class Torsion1DTaskSpec(QCGenerationTask):
     type: Literal["torsion1d"] = "torsion1d"
 
@@ -70,6 +82,15 @@ class Torsion1DTaskSpec(QCGenerationTask):
     n_conformers: conint(gt=0) = Field(
         10,
         description="The number of initial conformers to seed the torsion drive with.",
+    )
+
+    single_point_spec: Optional[SinglePointSpec] = Field(
+        None,
+        description="An optional higher level of theory at which to compute "
+        "single-point energies for each optimized grid geometry. When set, the torsion "
+        "drive is optimized at `program`/`model` (e.g. xTB) and the resulting grid "
+        "energies are replaced by single-point energies computed at this specification "
+        "(e.g. DFT); the optimized geometries are retained.",
     )
 
 

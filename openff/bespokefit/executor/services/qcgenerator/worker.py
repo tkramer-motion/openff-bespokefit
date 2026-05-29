@@ -14,7 +14,7 @@ import qcelemental
 import qcengine
 from celery.utils.log import get_task_logger
 from openff.toolkit.topology import Atom, Molecule
-from qcelemental.models import AtomicResult
+from qcelemental.models import AtomicInput, AtomicResult
 from qcelemental.models.common_models import DriverEnum
 from qcelemental.models.procedures import (
     OptimizationInput,
@@ -86,6 +86,44 @@ def _get_program_keywords(program: str) -> Dict[str, str]:
         # <https://github.com/openforcefield/openff-bespokefit/issues/238>
         keywords["verbosity"] = "muted"
     return keywords
+
+
+def _single_point_torsion_energies(
+    task: Torsion1DTask, td_result: TorsionDriveResult
+) -> TorsionDriveResult:
+    """Re-evaluate torsion drive grid energies at a higher level of theory.
+
+    The geometries optimized during the drive (e.g. with xTB) are retained while each
+    grid energy is replaced by a single-point energy computed with
+    ``task.single_point_spec`` (e.g. DFT).
+    """
+    spec = task.single_point_spec
+
+    _task_logger.info(
+        f"computing single-point energies at {spec.program}/{spec.model.method} "
+        f"for {len(td_result.final_molecules)} grid points"
+    )
+
+    final_energies = {}
+
+    for grid_id, qc_molecule in td_result.final_molecules.items():
+        single_point = qcengine.compute(
+            AtomicInput(
+                molecule=qc_molecule,
+                driver=DriverEnum.energy,
+                model=spec.model,
+                keywords=_get_program_keywords(spec.program),
+            ),
+            spec.program,
+            raise_error=True,
+            task_config=_task_config(),
+        )
+        final_energies[grid_id] = float(single_point.return_result)
+
+    return TorsionDriveResult(
+        **td_result.dict(exclude={"final_energies"}),
+        final_energies=final_energies,
+    )
 
 
 @celery_app.task(acks_late=True)
@@ -171,6 +209,9 @@ def compute_torsion_drive(task_json: str) -> TorsionDriveResult:
             **return_value.dict(exclude={"optimization_history", "stdout", "stderr"}),
             optimization_history={},
         )
+
+        if task.single_point_spec is not None:
+            return_value = _single_point_torsion_energies(task, return_value)
 
     # noinspection PyTypeChecker
     return return_value.json()
