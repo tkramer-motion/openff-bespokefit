@@ -121,6 +121,22 @@ def _to_input_schema(
 
     from openff.bespokefit.workflows.bespoke import BespokeWorkflowFactory
 
+    # Each QC spec takes three values (PROGRAM METHOD BASIS). If a value is omitted, click
+    # silently swallows the following flag as one of them; catch that here with a clear
+    # message rather than failing deep inside QCSpec validation.
+    for option_name, spec in [
+        ("--default-qc-spec", default_qc_spec),
+        ("--single-point-qc-spec", single_point_qc_spec),
+    ]:
+        if spec is not None and any(value.startswith("-") for value in spec):
+            exit_with_messages(
+                f"[[red]ERROR[/red]] {option_name} expects three values: "
+                f"PROGRAM METHOD BASIS (e.g. `{option_name} xtb gfn2xtb none`). It looks "
+                f"like a value was omitted — got {list(spec)}.",
+                console=console,
+                exit_code=2,
+            )
+
     if (workflow_name is not None and workflow_file_name is not None) or (
         workflow_name is None and workflow_file_name is None
     ):

@@ -111,6 +111,21 @@ def _run_series_cli(
             )
         )
 
+    # Fail now (not after hours of QC) if parallel ForceBalance was requested but cctools
+    # is unavailable.
+    if joint and forcebalance_workers:
+        import shutil
+
+        if shutil.which("work_queue_worker") is None:
+            exit_with_messages(
+                "[[red]ERROR[/red]] --forcebalance-workers needs cctools / Work Queue, "
+                "but `work_queue_worker` was not found on the PATH. Install it with "
+                "`conda install -c conda-forge ndcctools`, or drop --forcebalance-workers "
+                "to run ForceBalance serially.",
+                console=console,
+                exit_code=2,
+            )
+
     fit_torsion_smirks = {
         parameter.smirks
         for parameter in fit_force_field.get_parameter_handler(
