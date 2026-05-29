@@ -27,7 +27,9 @@ if TYPE_CHECKING:
 
 # The run command inherits these options so be sure to take that into account when
 # making changes here.
-def submit_options(allow_multiple_molecules: bool = False):
+def submit_options(
+    allow_multiple_molecules: bool = False, force_field_default: Optional[str] = None
+):
     return [
         click.option(
             "--file",
@@ -67,6 +69,8 @@ def submit_options(allow_multiple_molecules: bool = False):
             type=click.Path(exists=False, file_okay=True, dir_okay=False),
             help="A custom initial force field to start the bespoke fits from.",
             required=False,
+            default=force_field_default,
+            show_default=force_field_default is not None,
         ),
         optgroup.option(
             "--target-torsion",
@@ -109,6 +113,7 @@ def _to_input_schema(
     target_torsion_smirks: Tuple[str],
     default_qc_spec: Optional[Tuple[str, str, str]],
     single_point_qc_spec: Optional[Tuple[str, str, str]],
+    broad_smirks: bool,
     workflow_name: Optional[str],
     workflow_file_name: Optional[str],
 ) -> "BespokeOptimizationSchema":
@@ -169,6 +174,15 @@ def _to_input_schema(
                 basis=basis,
                 spec_description="CLI provided single-point spec",
             )
+        if broad_smirks:
+            from openff.bespokefit.utilities.smirks import SMIRKSettings
+
+            # Use the base force field's existing (broad) torsion SMIRKS rather than
+            # minting molecule-specific ones, so a joint fit can share parameters across
+            # the series.
+            workflow_factory.smirk_settings = SMIRKSettings(
+                generate_bespoke_terms=False, expand_torsion_terms=False
+            )
 
     except FileNotFoundError:
         exit_with_messages(
@@ -222,6 +236,7 @@ def _submit(
     workflow_file_name: Optional[str],
     allow_multiple_molecules: bool,
     save_submission: bool,
+    broad_smirks: bool = False,
 ) -> List[str]:
     from openff.toolkit.topology import Molecule
 
@@ -287,6 +302,7 @@ def _submit(
                 target_torsion_smirks,
                 default_qc_spec,
                 single_point_qc_spec,
+                broad_smirks,
                 workflow_name,
                 workflow_file_name,
             )
