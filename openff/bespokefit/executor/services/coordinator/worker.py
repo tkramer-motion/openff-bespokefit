@@ -77,6 +77,7 @@ async def _process_task(task_id: int) -> bool:
 async def cycle():  # pragma: no cover
     settings = current_settings()
     n_connection_errors = 0
+    n_consecutive_errors = 0
 
     while True:
         sleep_time = settings.BEFLOW_COORDINATOR_MAX_UPDATE_INTERVAL
@@ -103,10 +104,17 @@ async def cycle():  # pragma: no cover
                 # tasks running
                 await asyncio.sleep(0.0)
 
-                push_task_status(
-                    pop_task_status(TaskStatus.running),
-                    TaskStatus.running if not has_finished else TaskStatus.complete,
-                )
+                # Pop the task we just processed and move it on. The pop can return None
+                # if the running queue drained between the peek above and here (an
+                # end-of-run race); guard against pushing None, which Redis cannot encode.
+                popped_task_id = pop_task_status(TaskStatus.running)
+                if popped_task_id is not None:
+                    push_task_status(
+                        popped_task_id,
+                        TaskStatus.running
+                        if not has_finished
+                        else TaskStatus.complete,
+                    )
 
                 processed_task_ids.add(task_id)
 
@@ -119,11 +127,12 @@ async def cycle():  # pragma: no cover
             )
 
             for _ in range(n_tasks_to_queue):
-                push_task_status(
-                    pop_task_status(TaskStatus.waiting), TaskStatus.running
-                )
+                waiting_task_id = pop_task_status(TaskStatus.waiting)
+                if waiting_task_id is not None:
+                    push_task_status(waiting_task_id, TaskStatus.running)
 
             n_connection_errors = 0
+            n_consecutive_errors = 0
 
             # Make sure we don't cycle too often
             sleep_time = max(sleep_time - (time.perf_counter() - start_time), 0.0)
@@ -151,9 +160,16 @@ async def cycle():  # pragma: no cover
                 )
 
         except Exception as e:
+            n_consecutive_errors += 1
             error_info = {"type": type(e).__name__, "message": str(e), "traceback": traceback.format_exc(), "time": time.time()}
             _debug_info["last_error"] = error_info
             _debug_info["recent_errors"].append(error_info)
             print(f"Coordinator error: {error_info}", flush=True)
+
+            # Don't spin forever on a persistent error. Give up so the failure surfaces
+            # (the client health-check turns a stopped coordinator into a clear error
+            # for the caller instead of an indefinite hang).
+            if n_consecutive_errors >= 10:
+                raise
 
         await asyncio.sleep(sleep_time)

@@ -122,7 +122,13 @@ def pop_task_status(status: TaskStatus) -> Optional[int]:
     return None if task_id is None else int(task_id)
 
 
-def push_task_status(task_id: int, status: TaskStatus):
+def push_task_status(task_id: Optional[int], status: TaskStatus):
+    # ``task_id`` can be None when a pop raced an empty queue (an end-of-run race that the
+    # QC cache makes more likely by draining tasks quickly). Never RPUSH None: Redis
+    # cannot encode it and it would crash the coordinator cycle.
+    if task_id is None:
+        return None
+
     connection = connect_to_default_redis()
     return connection.rpush(_QUEUE_NAMES[status], task_id)
 

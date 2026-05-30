@@ -296,6 +296,41 @@ class BespokeFitClient:
             if stage.status in ["errored", "success"]:
                 break
 
+            # If the coordinator's background task has died, the stage can never make
+            # progress -- surface that instead of polling forever.
+            failure = self._coordinator_worker_failure()
+            if failure is not None:
+                raise RuntimeError(
+                    f"the bespoke executor coordinator stopped while waiting for the "
+                    f"'{stage_type}' stage and can no longer make progress ({failure}); "
+                    f"check the executor logs"
+                )
+
             time.sleep(frequency)
 
         return stage
+
+    def _coordinator_worker_failure(self) -> Optional[str]:
+        """Return a short description of why the coordinator's background task has
+        stopped, or ``None`` if it is still running (or its health can't be determined).
+        """
+        try:
+            response = self._session.get(f"{self.executor_url}debug/coordinator")
+            if response.status_code != 200:
+                return None
+            info = response.json()
+        except (requests.RequestException, ValueError):
+            return None
+
+        if not info.get("worker_task_done"):
+            return None
+        if info.get("worker_task_cancelled"):
+            return "the coordinator background task was cancelled"
+
+        exception = info.get("worker_task_exception")
+        if exception:
+            return (
+                f"the coordinator background task crashed with "
+                f"{exception.get('type')}: {exception.get('message')}"
+            )
+        return "the coordinator background task exited unexpectedly"
