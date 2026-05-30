@@ -12,6 +12,7 @@ from openff.bespokefit import _joint_fit
 from openff.bespokefit._joint_fit import (
     _find_free_port,
     count_single_point_failures,
+    count_unique_torsions,
     enable_work_queue,
     pool_parameters_and_targets,
     work_queue_workers,
@@ -35,6 +36,30 @@ class _RefData:
     def __init__(self, qc_records):
         self.qc_records = qc_records
 
+    def copy(self, update=None):
+        new = _RefData(list(self.qc_records))
+        for key, value in (update or {}).items():
+            setattr(new, key, value)
+        return new
+
+
+class _Mol:
+    def __init__(self, cmiles):
+        self.extras = {"canonical_isomeric_explicit_hydrogen_mapped_smiles": cmiles}
+
+
+class _KW:
+    def __init__(self, dihedral):
+        self.dihedrals = [dihedral]
+
+
+class _Record:
+    """A torsion-drive record stub with the fields _torsion_record_identity reads."""
+
+    def __init__(self, cmiles, dihedral=(0, 1, 2, 3)):
+        self.initial_molecule = [_Mol(cmiles)]
+        self.keywords = _KW(dihedral)
+
 
 class _Placeholder:
     """Stands in for BespokeQCData (no concrete QC records yet)."""
@@ -47,6 +72,12 @@ class _Target:
     def __init__(self, reference_data):
         self.reference_data = reference_data
 
+    def copy(self, update=None):
+        new = _Target(self.reference_data)
+        for key, value in (update or {}).items():
+            setattr(new, key, value)
+        return new
+
 
 class _Stage:
     def __init__(self, parameters, targets):
@@ -55,7 +86,9 @@ class _Stage:
 
 
 def _target():
-    return _Target(_RefData(qc_records=["torsion-drive"]))
+    # A unique torsion-drive record (distinct identity per call), so pooling does not
+    # collapse separate molecules' targets.
+    return _Target(_RefData(qc_records=[object()]))
 
 
 def test_pool_dedups_and_unions_attributes():
@@ -124,6 +157,55 @@ def test_pool_raises_with_empty_qc_records():
 
     with pytest.raises(ValueError, match="missing its QC reference data"):
         pool_parameters_and_targets([stage])
+
+
+def test_pool_dedups_duplicate_torsion_records():
+    """A torsion drive shared by two molecules (same identity) is kept once; distinct
+    R-group torsions are all retained."""
+    stage_a = _Stage(
+        parameters=[_Param("ProperTorsions", "S", {"k1"})],
+        targets=[
+            _Target(
+                _RefData([_Record("scaffold"), _Record("rgroup-A", (4, 5, 6, 7))])
+            )
+        ],
+    )
+    stage_b = _Stage(
+        parameters=[_Param("ProperTorsions", "S", {"k1"})],
+        targets=[
+            _Target(
+                _RefData([_Record("scaffold"), _Record("rgroup-B", (4, 5, 6, 7))])
+            )
+        ],
+    )
+
+    _, targets = pool_parameters_and_targets([stage_a, stage_b])
+
+    cmiles = sorted(
+        record.initial_molecule[0].extras[
+            "canonical_isomeric_explicit_hydrogen_mapped_smiles"
+        ]
+        for target in targets
+        for record in target.reference_data.qc_records
+    )
+    # scaffold appears once; both distinct R-group torsions retained
+    assert cmiles == ["rgroup-A", "rgroup-B", "scaffold"]
+
+
+def test_count_unique_torsions():
+    out_a = _SPOutput(
+        _SPResults(
+            _SPSchema(
+                [_SPStage([_SPTarget(_SPRef([_Record("scaffold"), _Record("rA")]))])]
+            )
+        )
+    )
+    out_b = _SPOutput(
+        _SPResults(_SPSchema([_SPStage([_SPTarget(_SPRef([_Record("scaffold")]))])]))
+    )
+    # 3 total references, scaffold shared -> 2 unique
+    assert count_unique_torsions([out_a, out_b]) == (3, 2)
+    assert count_unique_torsions([]) == (0, 0)
 
 
 # --- Work Queue helpers --------------------------------------------------------------

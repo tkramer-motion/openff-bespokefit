@@ -221,6 +221,29 @@ mismatch.
 
 ---
 
+## Reusing shared torsions across the series
+
+A congeneric series shares a scaffold, so most torsions recur across ligands. bespokefit
+caches QC by a canonicalized task hash, so each **unique** torsion drive is computed once
+and reused everywhere it appears — this is what keeps a whole series tractable in an FEP
+timeframe. After the QC stage the run reports how much was shared:
+
+```
+✓ computed 23 unique torsion drives, reused 71 from cache (across 12 molecule(s))
+```
+
+For a tight congeneric set you want **unique ≪ total** — lots of "reused" means the shared
+scaffold is being computed once, as intended. If "unique" is close to the total, the
+fragments aren't matching across ligands (e.g. R-groups sit too close to the scaffold
+torsions), and the series isn't sharing as much as it could.
+
+In a `--joint` fit the same shared drive is referenced by every molecule that contains it;
+those duplicate references are **de-duplicated by identity** (fragment CMILES + scanned
+dihedral) before fitting, so a shared torsion is fit once against its data rather than
+over-weighted — and ForceBalance doesn't waste target evaluations on the copies.
+
+---
+
 ## When a DFT single point fails to converge
 
 Single-point energies are computed **per grid point and are fault tolerant**. If a grid

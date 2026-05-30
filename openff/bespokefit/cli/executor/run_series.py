@@ -63,7 +63,10 @@ def _run_series_cli(
 
     from openff.toolkit import ForceField
 
-    from openff.bespokefit._joint_fit import count_single_point_failures
+    from openff.bespokefit._joint_fit import (
+        count_single_point_failures,
+        count_unique_torsions,
+    )
     from openff.bespokefit._tmd import (
         collect_fitted_torsions,
         load_tmd_force_field,
@@ -227,6 +230,15 @@ def _run_series_cli(
             "[[red]ERROR[/red]] none of the optimizations completed successfully",
             console=console,
             exit_code=2,
+        )
+
+    # Report how much the congeneric series shared (QC computed once, reused elsewhere).
+    n_torsions_total, n_torsions_unique = count_unique_torsions(successful_outputs)
+    if n_torsions_total:
+        console.print(
+            f"[[green]✓[/green]] computed [blue]{n_torsions_unique}[/blue] unique "
+            f"torsion drives, reused [blue]{n_torsions_total - n_torsions_unique}[/blue] "
+            f"from cache (across [blue]{len(successful_outputs)}[/blue] molecule(s))"
         )
 
     console.print(Padding("4. building the tmd force field", (1, 0, 1, 0)))

@@ -29,12 +29,38 @@ def _has_qc_data(reference_data) -> bool:
     return bool(getattr(reference_data, "qc_records", None))
 
 
+def _torsion_record_identity(record):
+    """A stable identity for a torsion-drive QC record: ``(canonical fragment CMILES,
+    scanned dihedral)``.
+
+    A congeneric series shares scaffold torsions, so the same drive (after task
+    canonicalization) is referenced by several molecules; this identity lets those be
+    de-duplicated. Falls back to per-object identity (i.e. no de-dup) when the record
+    can't be introspected, so it never collapses genuinely distinct drives.
+    """
+    initial = getattr(record, "initial_molecule", None)
+    molecule = initial[0] if isinstance(initial, (list, tuple)) and initial else initial
+    extras = getattr(molecule, "extras", None) or {}
+    cmiles = extras.get("canonical_isomeric_explicit_hydrogen_mapped_smiles")
+
+    keywords = getattr(record, "keywords", None)
+    dihedrals = getattr(keywords, "dihedrals", None)
+    dihedral = tuple(dihedrals[0]) if dihedrals else None
+
+    if cmiles is None:
+        return id(record)
+    return (cmiles, dihedral)
+
+
 def pool_parameters_and_targets(stages) -> Tuple[list, list]:
     """Pool the parameters and targets of several optimization stages.
 
     Parameters are de-duplicated by ``(type, smirks)`` with their fitted ``attributes``
     unioned, so a torsion shared by several molecules is fit once against all of their
-    data. Targets are concatenated; each carries its own molecule's QC reference data.
+    data. Targets are pooled with their torsion-drive QC records **de-duplicated by
+    identity** -- shared-scaffold torsions referenced by several molecules are kept once,
+    so they are not over-weighted or evaluated repeatedly in the joint objective. A target
+    whose records are all duplicates is dropped.
 
     Raises:
         ValueError: if a target is missing concrete QC reference data.
@@ -42,6 +68,7 @@ def pool_parameters_and_targets(stages) -> Tuple[list, list]:
     parameters_by_key = {}
     ordered_keys = []
     targets = []
+    seen_records = set()
 
     for stage in stages:
         for parameter in stage.parameters:
@@ -53,13 +80,36 @@ def pool_parameters_and_targets(stages) -> Tuple[list, list]:
                 parameters_by_key[key][1].update(parameter.attributes)
 
         for target in stage.targets:
-            if not _has_qc_data(target.reference_data):
+            reference_data = target.reference_data
+            if not _has_qc_data(reference_data):
                 raise ValueError(
                     "A fitting target is missing its QC reference data; the joint fit "
                     "needs the generated torsion drives. Ensure every optimization in "
                     "the series completed successfully."
                 )
-            targets.append(target)
+
+            unique_records = []
+            for record in reference_data.qc_records:
+                identity = _torsion_record_identity(record)
+                if identity in seen_records:
+                    continue
+                seen_records.add(identity)
+                unique_records.append(record)
+
+            if not unique_records:
+                continue
+            if len(unique_records) == len(reference_data.qc_records):
+                targets.append(target)
+            else:
+                targets.append(
+                    target.copy(
+                        update={
+                            "reference_data": reference_data.copy(
+                                update={"qc_records": unique_records}
+                            )
+                        }
+                    )
+                )
 
     parameters = [
         parameter.copy(update={"attributes": attributes})
@@ -103,6 +153,33 @@ def count_single_point_failures(outputs) -> Tuple[int, int, int]:
                         n_affected += 1
 
     return n_failed, n_total, n_affected
+
+
+def count_unique_torsions(outputs) -> Tuple[int, int]:
+    """Across completed bespoke results, return ``(n_total, n_unique)`` torsion drives.
+
+    A congeneric series shares scaffold torsions, which bespokefit's QC cache computes
+    once and references from every molecule that contains them; ``n_total - n_unique`` is
+    therefore the number of torsion drives reused from cache. Works in both per-molecule
+    and joint modes; returns zeros when no torsions are present.
+    """
+    total = 0
+    seen = set()
+
+    for output in outputs:
+        results = getattr(output, "results", None)
+        schema = getattr(results, "input_schema", None) if results is not None else None
+        if schema is None:
+            continue
+
+        for stage in schema.stages:
+            for target in stage.targets:
+                reference_data = getattr(target, "reference_data", None)
+                for record in getattr(reference_data, "qc_records", None) or []:
+                    total += 1
+                    seen.add(_torsion_record_identity(record))
+
+    return total, len(seen)
 
 
 def build_joint_stage(per_molecule_schemas: List):
