@@ -14,12 +14,15 @@ schema construction and optimiser invocation import the heavier bespokefit/OpenF
 lazily so this module stays cheap to import.
 """
 
+import logging
 import os
 import shutil
 import socket
 import subprocess
 from contextlib import contextmanager
 from typing import List, Optional, Tuple
+
+_logger = logging.getLogger(__name__)
 
 
 def _has_qc_data(reference_data) -> bool:
@@ -48,6 +51,10 @@ def _torsion_record_identity(record):
     dihedral = tuple(dihedrals[0]) if dihedrals else None
 
     if cmiles is None:
+        _logger.debug(
+            "torsion-drive record has no CMILES in its initial-molecule extras; falling "
+            "back to object identity, so it will not be de-duplicated across the series."
+        )
         return id(record)
     return (cmiles, dihedral)
 
@@ -57,18 +64,21 @@ def pool_parameters_and_targets(stages) -> Tuple[list, list]:
 
     Parameters are de-duplicated by ``(type, smirks)`` with their fitted ``attributes``
     unioned, so a torsion shared by several molecules is fit once against all of their
-    data. Targets are pooled with their torsion-drive QC records **de-duplicated by
-    identity** -- shared-scaffold torsions referenced by several molecules are kept once,
-    so they are not over-weighted or evaluated repeatedly in the joint objective. A target
-    whose records are all duplicates is dropped.
+    data. Torsion-drive QC records are **de-duplicated by identity** -- shared-scaffold
+    torsions referenced by several molecules are kept once, so they are not over-weighted
+    or evaluated repeatedly -- and all targets of a type are merged into a single target
+    carrying the unique records. (ForceBalance names targets from a per-target record
+    index, so keeping one target per molecule would produce colliding names like
+    ``torsion-0`` from every molecule.)
 
     Raises:
         ValueError: if a target is missing concrete QC reference data.
     """
     parameters_by_key = {}
     ordered_keys = []
-    targets = []
     seen_records = set()
+    targets_by_type = {}
+    type_order = []
 
     for stage in stages:
         for parameter in stage.parameters:
@@ -98,18 +108,25 @@ def pool_parameters_and_targets(stages) -> Tuple[list, list]:
 
             if not unique_records:
                 continue
-            if len(unique_records) == len(reference_data.qc_records):
-                targets.append(target)
-            else:
-                targets.append(
-                    target.copy(
-                        update={
-                            "reference_data": reference_data.copy(
-                                update={"qc_records": unique_records}
-                            )
-                        }
-                    )
+
+            target_type = getattr(target, "type", type(target).__name__)
+            if target_type not in targets_by_type:
+                # First target of this type becomes the template the records merge into.
+                targets_by_type[target_type] = [target, []]
+                type_order.append(target_type)
+            targets_by_type[target_type][1].extend(unique_records)
+
+    targets = [
+        template.copy(
+            update={
+                "reference_data": template.reference_data.copy(
+                    update={"qc_records": records}
                 )
+            }
+        )
+        for target_type in type_order
+        for template, records in [targets_by_type[target_type]]
+    ]
 
     parameters = [
         parameter.copy(update={"attributes": attributes})
@@ -125,11 +142,13 @@ def count_single_point_failures(outputs) -> Tuple[int, int, int]:
     across a series of completed bespoke results.
 
     Returns ``(n_failed, n_total, n_affected_drives)``, read from the per-drive failure
-    record the QC worker stamps into each ``TorsionDriveResult``'s ``extras``. Works for
-    both per-molecule and joint runs, and returns zeros when no single-point spec was
-    used.
+    record the QC worker stamps into each ``TorsionDriveResult``'s ``extras``. Drives
+    shared across the series (same identity) are counted once -- matching the QC cache --
+    so the totals reflect unique single-point computations. Works for both per-molecule
+    and joint runs, and returns zeros when no single-point spec was used.
     """
     n_failed = n_total = n_affected = 0
+    seen = set()
 
     for output in outputs:
         results = getattr(output, "results", None)
@@ -141,6 +160,11 @@ def count_single_point_failures(outputs) -> Tuple[int, int, int]:
             for target in stage.targets:
                 reference_data = getattr(target, "reference_data", None)
                 for record in getattr(reference_data, "qc_records", None) or []:
+                    identity = _torsion_record_identity(record)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+
                     info = (getattr(record, "extras", None) or {}).get(
                         "bespokefit_single_point_failures"
                     )

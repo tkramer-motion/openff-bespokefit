@@ -71,9 +71,22 @@ def cached_compute_task(
     task_id = redis_connection.hget("qcgenerator:task-ids", task_hash)
 
     if task_id is not None:
+        # Printed (not logged) so it surfaces in the executor console even though the
+        # gateway's log level defaults to "error". A hit means this exact QC task was
+        # already computed -- earlier this run, or in a previous run sharing the same
+        # --directory (persistent redis) -- so it is reused without recomputing.
+        print(
+            f"[qc-cache] HIT: reusing cached {task.type} result {task_id.decode()} "
+            f"(no recompute)",
+            flush=True,
+        )
         return task_id.decode()
 
     task_id = compute.delay(task_json=task.json()).id
+    print(
+        f"[qc-cache] MISS: submitting new {task.type} calculation {task_id}",
+        flush=True,
+    )
 
     redis_connection.hset("qcgenerator:types", task_id, task.type)
     # Make sure to only set the hash after the type is set in case the connection

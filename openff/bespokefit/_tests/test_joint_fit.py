@@ -54,11 +54,18 @@ class _KW:
 
 
 class _Record:
-    """A torsion-drive record stub with the fields _torsion_record_identity reads."""
+    """A torsion-drive record stub with the fields _torsion_record_identity reads.
 
-    def __init__(self, cmiles, dihedral=(0, 1, 2, 3)):
+    ``failures`` optionally stamps the per-drive single-point failure record that
+    ``count_single_point_failures`` reads from ``extras``.
+    """
+
+    def __init__(self, cmiles, dihedral=(0, 1, 2, 3), failures=None):
         self.initial_molecule = [_Mol(cmiles)]
         self.keywords = _KW(dihedral)
+        self.extras = (
+            {"bespokefit_single_point_failures": failures} if failures else {}
+        )
 
 
 class _Placeholder:
@@ -108,7 +115,9 @@ def test_pool_dedups_and_unions_attributes():
     assert len(parameters) == 1
     assert parameters[0].smirks == "[*:1]-[*:2]-[*:3]-[*:4]"
     assert parameters[0].attributes == {"k1", "k2"}
-    assert len(targets) == 2
+    # both molecules' distinct drives are retained, merged into one target
+    assert len(targets) == 1
+    assert len(targets[0].reference_data.qc_records) == 2
 
 
 def test_pool_keeps_distinct_smirks_in_order():
@@ -309,6 +318,26 @@ def test_count_single_point_failures_handles_missing_data():
 
     assert count_single_point_failures([_Bare()]) == (0, 0, 0)
     assert count_single_point_failures([]) == (0, 0, 0)
+
+
+def test_count_single_point_failures_dedupes_shared_drives():
+    """A shared (cached) drive referenced by several molecules is counted once, matching
+    count_unique_torsions rather than being double-counted per reference."""
+    sp = {"n_failed": 2, "n_total": 24}
+    shared_a = _SPOutput(
+        _SPResults(
+            _SPSchema([_SPStage([_SPTarget(_SPRef([_Record("scaffold", failures=sp)]))])])
+        )
+    )
+    shared_b = _SPOutput(
+        _SPResults(
+            _SPSchema([_SPStage([_SPTarget(_SPRef([_Record("scaffold", failures=sp)]))])])
+        )
+    )
+
+    # one unique drive -> 2/24 failed on 1 drive, not 4/48 across 2
+    assert count_single_point_failures([shared_a, shared_b]) == (2, 24, 1)
+    assert count_unique_torsions([shared_a, shared_b]) == (2, 1)
 
 
 # --- skip-optimization flag (joint mode skips the per-molecule fit) ------------------
