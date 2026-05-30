@@ -18,6 +18,49 @@ from openff.bespokefit.cli.utilities import (
 )
 
 
+def _print_torsion_fit_diagnostic(console, report) -> None:
+    """Print the scaffold (recurring) vs R-group (unique) MM-vs-QM RMSE summary, with a
+    verdict on whether a bespoke R-group (hybrid) treatment would likely help."""
+    recurring = report["recurring"]
+    unique = report["unique"]
+
+    if not recurring["n"] and not unique["n"]:
+        return
+
+    console.print(
+        Padding(
+            "torsion-fit diagnostic (MM vs QM relative energies, kcal/mol):",
+            (1, 0, 0, 0),
+        )
+    )
+    for label, stats in [
+        ("scaffold (recurring)", recurring),
+        ("R-group (unique)   ", unique),
+    ]:
+        if stats["n"]:
+            console.print(
+                f"    {label}: [blue]{stats['n']}[/blue] drives — mean "
+                f"[blue]{stats['mean']:.2f}[/blue], median "
+                f"[blue]{stats['median']:.2f}[/blue], max [blue]{stats['max']:.2f}[/blue]"
+            )
+        else:
+            console.print(f"    {label}: none evaluated")
+
+    if recurring["n"] and unique["n"] and recurring["mean"] and unique["mean"]:
+        ratio = unique["mean"] / recurring["mean"] if recurring["mean"] > 0 else None
+        if unique["mean"] > 0.5 and ratio and ratio > 1.5:
+            console.print(
+                f"    [yellow]→[/yellow] R-group torsions fit ~[blue]{ratio:.1f}x[/blue] "
+                f"worse than the scaffold — a bespoke R-group (hybrid) treatment would "
+                f"likely help."
+            )
+        else:
+            console.print(
+                "    [green]→[/green] R-group and scaffold torsions fit comparably; the "
+                "joint fit looks adequate."
+            )
+
+
 def _run_series_cli(
     input_file_path: Optional[List[str]],
     molecule_smiles: Optional[List[str]],
@@ -27,6 +70,7 @@ def _run_series_cli(
     joint: bool,
     forcebalance_workers: int,
     forcebalance_wq_port: Optional[int],
+    diagnose_fit: bool,
     force_field_path: Optional[str],
     target_torsion_smirks: Tuple[str],
     default_qc_spec: Optional[Tuple[str, str, str]],
@@ -66,6 +110,8 @@ def _run_series_cli(
     from openff.bespokefit._joint_fit import (
         count_single_point_failures,
         count_unique_torsions,
+        drive_frequencies,
+        torsion_fit_residual_report,
     )
     from openff.bespokefit._tmd import (
         collect_fitted_torsions,
@@ -285,6 +331,15 @@ def _run_series_cli(
                     wq_port=forcebalance_wq_port,
                 )
             ]
+
+        if diagnose_fit:
+            with console.status("scoring the joint fit against QM (MM vs QM RMSE)"):
+                fit_report = torsion_fit_residual_report(
+                    refit_force_fields[0],
+                    stage.targets,
+                    drive_frequencies(successful_outputs),
+                )
+            _print_torsion_fit_diagnostic(console, fit_report)
     else:
         # Compare against the force field the fits actually started from (so the
         # "what changed" detection stays consistent with --force-field), unless an
@@ -416,6 +471,19 @@ __run_series_options.insert(
         default=None,
         help="TCP port for the ForceBalance Work Queue manager. Defaults to an "
         "automatically chosen free port.",
+    ),
+)
+__run_series_options.insert(
+    10,
+    click.option(
+        "--diagnose-fit/--no-diagnose-fit",
+        "diagnose_fit",
+        default=True,
+        show_default=True,
+        help="After a --joint fit, score the fitted force field against the QM torsion "
+        "drives (MM-vs-QM RMSE) split by scaffold (recurring) vs R-group (unique) "
+        "torsions, to show whether a bespoke R-group treatment would help. Adds a short "
+        "post-fit step (needs OpenMM).",
     ),
 )
 __run_series_options.extend(launch_options(directory=None))

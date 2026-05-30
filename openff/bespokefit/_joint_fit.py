@@ -206,6 +206,134 @@ def count_unique_torsions(outputs) -> Tuple[int, int]:
     return total, len(seen)
 
 
+def drive_frequencies(outputs) -> dict:
+    """Return ``{drive identity: number of molecule references}`` across the series, using
+    the same identity as de-duplication. A drive referenced by >= 2 molecules is a shared
+    (scaffold) torsion; a drive referenced once is unique (R-group)."""
+    frequencies = {}
+
+    for output in outputs:
+        results = getattr(output, "results", None)
+        schema = getattr(results, "input_schema", None) if results is not None else None
+        if schema is None:
+            continue
+
+        for stage in schema.stages:
+            for target in stage.targets:
+                reference_data = getattr(target, "reference_data", None)
+                for record in getattr(reference_data, "qc_records", None) or []:
+                    identity = _torsion_record_identity(record)
+                    frequencies[identity] = frequencies.get(identity, 0) + 1
+
+    return frequencies
+
+
+def _torsion_profile_rmse(force_field, record) -> Optional[float]:
+    """RMSE (kcal/mol) between the MM and QM *relative* torsion-energy profiles, with the
+    MM energies evaluated as single points of ``force_field`` at the QM grid geometries.
+
+    Returns ``None`` if the profile can't be evaluated, so the diagnostic never crashes a
+    run. Requires OpenMM + the OpenFF toolkit, imported lazily.
+    """
+    try:
+        import numpy
+        import openmm
+        from openff.toolkit import Molecule
+
+        molecule_extras = getattr(record.initial_molecule[0], "extras", None) or {}
+        cmiles = molecule_extras.get(
+            "canonical_isomeric_explicit_hydrogen_mapped_smiles"
+        )
+        if cmiles is None:
+            return None
+
+        final_energies = record.final_energies
+        final_molecules = record.final_molecules
+        grids = [grid for grid in final_energies if grid in final_molecules]
+        if len(grids) < 2:
+            return None
+
+        molecule = Molecule.from_mapped_smiles(cmiles, allow_undefined_stereo=True)
+        system = force_field.create_openmm_system(molecule.to_topology())
+        context = openmm.Context(
+            system,
+            openmm.VerletIntegrator(1.0 * openmm.unit.femtoseconds),
+            openmm.Platform.getPlatformByName("Reference"),
+        )
+
+        _BOHR_TO_NM = 0.052917721067
+        _HARTREE_TO_KCAL = 627.5094740631
+
+        qm_energies = []
+        mm_energies = []
+        for grid in grids:
+            geometry = numpy.asarray(
+                final_molecules[grid].geometry, dtype=float
+            ).reshape(-1, 3)
+            context.setPositions((geometry * _BOHR_TO_NM) * openmm.unit.nanometer)
+            mm_energies.append(
+                context.getState(getEnergy=True)
+                .getPotentialEnergy()
+                .value_in_unit(openmm.unit.kilocalorie_per_mole)
+            )
+            qm_energies.append(final_energies[grid] * _HARTREE_TO_KCAL)
+
+        qm = numpy.array(qm_energies)
+        mm = numpy.array(mm_energies)
+        qm -= qm.min()
+        mm -= mm.min()
+        return float(numpy.sqrt(numpy.mean((mm - qm) ** 2)))
+    except Exception:
+        return None
+
+
+def summarize_fit_residuals(per_drive) -> dict:
+    """Aggregate ``[(is_recurring, rmse_or_None), ...]`` into per-class RMSE statistics.
+
+    Returns ``{"recurring": {...}, "unique": {...}}`` where each block has ``n`` (drives
+    with an evaluable RMSE), ``mean``, ``median`` and ``max`` (kcal/mol; ``None`` when no
+    drive in the class could be evaluated).
+    """
+    import statistics
+
+    def _stats(values):
+        values = [value for value in values if value is not None]
+        if not values:
+            return {"n": 0, "mean": None, "median": None, "max": None}
+        return {
+            "n": len(values),
+            "mean": statistics.fmean(values),
+            "median": statistics.median(values),
+            "max": max(values),
+        }
+
+    return {
+        "recurring": _stats([rmse for recurring, rmse in per_drive if recurring]),
+        "unique": _stats([rmse for recurring, rmse in per_drive if not recurring]),
+    }
+
+
+def torsion_fit_residual_report(
+    force_field, targets, frequencies, recurring_threshold: int = 2
+) -> dict:
+    """Score how well ``force_field`` reproduces each unique torsion drive in ``targets``
+    (MM-vs-QM profile RMSE), split into scaffold (recurring) and R-group (unique) drives.
+
+    Use this after a joint fit to see whether the shared-SMIRKS fit reproduces the unique
+    R-group torsions as well as the shared scaffold ones; if the unique RMSEs are much
+    larger, a bespoke R-group treatment (the hybrid scheme) would likely help.
+    """
+    per_drive = []
+    for target in targets:
+        reference_data = getattr(target, "reference_data", None)
+        for record in getattr(reference_data, "qc_records", None) or []:
+            identity = _torsion_record_identity(record)
+            is_recurring = frequencies.get(identity, 1) >= recurring_threshold
+            per_drive.append((is_recurring, _torsion_profile_rmse(force_field, record)))
+
+    return summarize_fit_residuals(per_drive)
+
+
 def build_joint_stage(per_molecule_schemas: List):
     """Build a single ``OptimizationStageSchema`` that fits shared parameters against the
     pooled targets of every per-molecule schema (using each schema's final stage).

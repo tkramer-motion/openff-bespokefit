@@ -13,8 +13,10 @@ from openff.bespokefit._joint_fit import (
     _find_free_port,
     count_single_point_failures,
     count_unique_torsions,
+    drive_frequencies,
     enable_work_queue,
     pool_parameters_and_targets,
+    summarize_fit_residuals,
     work_queue_workers,
 )
 
@@ -338,6 +340,42 @@ def test_count_single_point_failures_dedupes_shared_drives():
     # one unique drive -> 2/24 failed on 1 drive, not 4/48 across 2
     assert count_single_point_failures([shared_a, shared_b]) == (2, 24, 1)
     assert count_unique_torsions([shared_a, shared_b]) == (2, 1)
+
+
+def test_drive_frequencies():
+    out_a = _SPOutput(
+        _SPResults(
+            _SPSchema([_SPStage([_SPTarget(_SPRef([_Record("scaffold"), _Record("rA")]))])])
+        )
+    )
+    out_b = _SPOutput(
+        _SPResults(_SPSchema([_SPStage([_SPTarget(_SPRef([_Record("scaffold")]))])]))
+    )
+    # scaffold referenced by both molecules, rA by one
+    assert sorted(drive_frequencies([out_a, out_b]).values()) == [1, 2]
+
+
+def test_summarize_fit_residuals_splits_and_skips_none():
+    per_drive = [
+        (True, 0.2),
+        (True, 0.4),
+        (False, 1.0),
+        (False, 2.0),
+        (False, None),  # unevaluable -> skipped
+    ]
+    summary = summarize_fit_residuals(per_drive)
+
+    assert summary["recurring"]["n"] == 2
+    assert summary["recurring"]["mean"] == pytest.approx(0.3)
+    assert summary["unique"]["n"] == 2  # the None is not counted
+    assert summary["unique"]["mean"] == pytest.approx(1.5)
+    assert summary["unique"]["max"] == 2.0
+
+
+def test_summarize_fit_residuals_empty():
+    summary = summarize_fit_residuals([])
+    assert summary["recurring"] == {"n": 0, "mean": None, "median": None, "max": None}
+    assert summary["unique"] == {"n": 0, "mean": None, "median": None, "max": None}
 
 
 # --- skip-optimization flag (joint mode skips the per-molecule fit) ------------------

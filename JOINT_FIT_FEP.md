@@ -244,6 +244,31 @@ over-weighted — and ForceBalance doesn't waste target evaluations on the copie
 
 ---
 
+## Is the joint fit good enough? (torsion-fit diagnostic)
+
+After a `--joint` fit (unless you pass `--no-diagnose-fit`), the fitted force field is
+scored against the QM torsion drives — the RMSE between the MM and QM *relative* energy
+profiles (single-point MM energies at the QM grid geometries) — and reported split by
+**scaffold (recurring)** vs **R-group (unique)** torsions:
+
+```
+torsion-fit diagnostic (MM vs QM relative energies, kcal/mol):
+    scaffold (recurring): 18 drives — mean 0.31, median 0.28, max 0.79
+    R-group (unique)   :  7 drives — mean 1.12, median 0.95, max 2.40
+    → R-group torsions fit ~3.6x worse than the scaffold — a bespoke R-group (hybrid)
+      treatment would likely help.
+```
+
+This tells you whether the shared-SMIRKS joint fit reproduces the unique R-group torsions
+as well as the shared scaffold ones. If the R-group RMSEs are comparable to the scaffold's,
+the joint fit is adequate and you're done. If they're much larger, the generic SMIRKS
+aren't capturing those R-group torsions and a **hybrid** scheme (broad/joint scaffold +
+bespoke R-group torsions) would be worth building. The diagnostic adds a short post-fit
+step and needs OpenMM; the recurring/unique split uses the same shared-fragment identity
+as the de-duplication.
+
+---
+
 ## When a DFT single point fails to converge
 
 Single-point energies are computed **per grid point and are fault tolerant**. If a grid
