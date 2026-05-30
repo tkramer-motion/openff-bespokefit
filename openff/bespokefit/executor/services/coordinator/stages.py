@@ -207,7 +207,17 @@ class QCGenerationStage(_Stage):
 
         cached_torsions = None
 
-        if is_redis_available(
+        # In joint mode the per-molecule fit is skipped and a single joint fit is run over
+        # the pooled QC data, so the fitted-parameter cache must NOT be consulted here: it
+        # would mark torsions "cached" and short-circuit QC generation, leaving targets
+        # without the reference data the joint fit needs to pool. The QC-task cache still
+        # reuses the (expensive) torsion drives, so this stays fast on a warm cache.
+        use_parameter_cache = not any(
+            getattr(stage, "skip_optimization", False)
+            for stage in input_schema.stages
+        )
+
+        if use_parameter_cache and is_redis_available(
             host=settings.BEFLOW_REDIS_ADDRESS, port=settings.BEFLOW_REDIS_PORT
         ):
             redis_connection = connect_to_default_redis()
