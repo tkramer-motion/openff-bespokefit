@@ -372,17 +372,28 @@ def _find_free_port() -> int:
 
 
 def enable_work_queue(stage, port: int) -> None:
-    """Configure ``stage``'s ForceBalance optimizer to distribute its target evaluations
-    to Work Queue workers connecting on ``port``.
+    """Configure ``stage`` to distribute its ForceBalance target evaluations to Work Queue
+    workers connecting on ``port``.
 
-    ForceBalance turns on its Work Queue manager when ``wq_port`` is set, and bespokefit
-    writes the optimizer ``extras`` verbatim into ``optimize.in`` -- so this simply adds
-    the relevant options there.
+    Two things are required, and ``stage`` carries both as ``extras`` that bespokefit
+    writes verbatim into ``optimize.in``:
+
+    * ``wq_port`` on the optimizer, which starts ForceBalance's Work Queue manager; and
+    * ``remote`` on **every target**, which tells ForceBalance to farm that target's
+      evaluations out to a worker. Without ``remote`` ForceBalance evaluates the targets
+      locally (serially, on one CPU) while the workers sit idle -- so both are set here.
     """
     extras = dict(stage.optimizer.extras)
     extras["wq_port"] = str(port)
     extras.setdefault("asynchronous", "")
     stage.optimizer = stage.optimizer.copy(update={"extras": extras})
+
+    remote_targets = []
+    for target in stage.targets:
+        target_extras = dict(getattr(target, "extras", None) or {})
+        target_extras.setdefault("remote", "1")
+        remote_targets.append(target.copy(update={"extras": target_extras}))
+    stage.targets = remote_targets
 
 
 @contextmanager

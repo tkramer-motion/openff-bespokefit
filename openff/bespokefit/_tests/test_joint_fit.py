@@ -233,16 +233,31 @@ class _Optimizer:
         return new
 
 
+class _WQTarget:
+    def __init__(self, extras=None):
+        self.extras = dict(extras or {})
+
+    def copy(self, update=None):
+        new = _WQTarget(self.extras)
+        for key, value in (update or {}).items():
+            setattr(new, key, value)
+        return new
+
+
 class _StageWithOptimizer:
-    def __init__(self, optimizer):
+    def __init__(self, optimizer, targets=None):
         self.optimizer = optimizer
+        self.targets = [] if targets is None else targets
 
 
-def test_enable_work_queue_sets_extras():
-    stage = _StageWithOptimizer(_Optimizer())
+def test_enable_work_queue_sets_extras_and_marks_targets_remote():
+    stage = _StageWithOptimizer(_Optimizer(), targets=[_WQTarget(), _WQTarget()])
     enable_work_queue(stage, 9876)
+
     assert stage.optimizer.extras["wq_port"] == "9876"
     assert "asynchronous" in stage.optimizer.extras
+    # every target must be flagged remote, or ForceBalance evaluates them locally
+    assert all(target.extras.get("remote") == "1" for target in stage.targets)
 
 
 def test_find_free_port_returns_usable_port():
