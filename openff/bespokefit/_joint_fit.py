@@ -586,6 +586,12 @@ def _optimize_to_force_field(stage, initial_force_field, root_directory: str):
 
     from openff.bespokefit.optimizers import get_optimizer
 
+    # Always start from a clean scratch directory. ForceBalance caches a remote force
+    # field (``forcefield-remote``) and other state keyed to the parameter vector; reusing
+    # a directory from a previous run with a different number of parameters (e.g. a joint
+    # run, then a hybrid run) makes ForceBalance compare mismatched ``mvals`` and crash.
+    shutil.rmtree(root_directory, ignore_errors=True)
+
     optimizer = get_optimizer(stage.optimizer.type)
     results = optimizer.optimize(
         schema=stage,
