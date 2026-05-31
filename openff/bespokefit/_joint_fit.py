@@ -405,7 +405,8 @@ def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
     seen = set()
     pooled_parameters = []
     pooled_parameter_smirks = set()
-    pooled_targets = []
+    targets_by_type = {}
+    type_order = []
 
     for schema in per_molecule_schemas:
         stage = schema.stages[-1]
@@ -462,15 +463,27 @@ def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
                         merged_smirks.add(smirks)
 
             if new_records:
-                pooled_targets.append(
-                    target.copy(
-                        update={
-                            "reference_data": target.reference_data.copy(
-                                update={"qc_records": new_records}
-                            )
-                        }
-                    )
+                # Merge every molecule's unique records into a single target per type.
+                # ForceBalance names target sub-directories by a per-target record index
+                # (torsion-0, torsion-1, ...), so keeping one target per molecule would
+                # produce colliding names ("The list of target names is not unique!").
+                target_type = getattr(target, "type", type(target).__name__)
+                if target_type not in targets_by_type:
+                    targets_by_type[target_type] = [target, []]
+                    type_order.append(target_type)
+                targets_by_type[target_type][1].extend(new_records)
+
+    pooled_targets = [
+        template.copy(
+            update={
+                "reference_data": template.reference_data.copy(
+                    update={"qc_records": records}
                 )
+            }
+        )
+        for target_type in type_order
+        for template, records in [targets_by_type[target_type]]
+    ]
 
     if not pooled_parameters:
         raise ValueError(
