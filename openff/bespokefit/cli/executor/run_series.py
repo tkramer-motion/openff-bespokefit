@@ -1,3 +1,4 @@
+import time
 from typing import List, Optional, Tuple
 
 import click
@@ -254,8 +255,38 @@ def _run_series_cli(
                     optimization_id=response_id, console=console
                 )
 
+                # The coordinator finalizes an optimization (attaches the fitted force
+                # field and moves the stage running -> complete) in a cycle that can lag
+                # behind the stage's status flipping to "success". If we read the result
+                # inside that window we see status != "errored" but bespoke_force_field
+                # is None. Re-poll briefly -- while the executor (and coordinator) is
+                # still alive -- so a last-finishing molecule is not dropped by a
+                # finalize/shutdown race.
+                finalize_deadline = time.monotonic() + 60.0
+                while (
+                    result.status != "errored"
+                    and result.bespoke_force_field is None
+                    and time.monotonic() < finalize_deadline
+                ):
+                    time.sleep(2.0)
+                    result = client.get_optimization(optimization_id=response_id)
+
                 if result.status == "errored" or result.bespoke_force_field is None:
-                    failures.append((response_id, result.error or "unknown error"))
+                    # Surface the actual stage state instead of a bare "unknown error"
+                    # so a finalize race (optimization succeeded but no force field was
+                    # persisted) is distinguishable from a genuine QC/chemistry failure.
+                    if result.error:
+                        reason = result.error
+                    else:
+                        stage_states = ", ".join(
+                            f"{stage.type}={stage.status}" for stage in result.stages
+                        )
+                        reason = (
+                            "no bespoke force field was returned even though no stage "
+                            f"errored (stages: {stage_states}) -- this is a coordinator "
+                            "finalize race, not a chemistry/QC failure"
+                        )
+                    failures.append((response_id, reason))
                     continue
 
                 successful_outputs.append(result)
