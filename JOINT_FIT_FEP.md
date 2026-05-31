@@ -135,7 +135,8 @@ This will:
 
 |Flag|Effect|
 |-|-|
-|`--joint`|One shared fit across the whole series (recommended for an FEP map).|
+|`--joint`|One shared fit across the whole series using the base force field's broad SMIRKS (recommended starting point for an FEP map).|
+|`--hybrid`|Pooled fit with **bespoke** SMIRKS: each unique fragment torsion fit once — shared scaffold torsions consistently, R-group torsions with their own bespoke parameters. Use when the diagnostic shows R-group torsions fitting worse than the scaffold. Takes precedence over `--joint`.|
 |`--per-molecule`|(default) Fit each molecule independently and merge its bespoke torsions.|
 
 ---
@@ -262,10 +263,71 @@ torsion-fit diagnostic (MM vs QM relative energies, kcal/mol):
 This tells you whether the shared-SMIRKS joint fit reproduces the unique R-group torsions
 as well as the shared scaffold ones. If the R-group RMSEs are comparable to the scaffold's,
 the joint fit is adequate and you're done. If they're much larger, the generic SMIRKS
-aren't capturing those R-group torsions and a **hybrid** scheme (broad/joint scaffold +
-bespoke R-group torsions) would be worth building. The diagnostic adds a short post-fit
-step and needs OpenMM; the recurring/unique split uses the same shared-fragment identity
-as the de-duplication.
+aren't capturing those R-group torsions and the `--hybrid` fit below is worth trying. The
+diagnostic adds a short post-fit step and needs OpenMM; the recurring/unique split uses the
+same shared-fragment identity as the de-duplication.
+
+---
+
+## The hybrid fit (`--hybrid`)
+
+`--hybrid` keeps the consistency of a joint fit for the scaffold while giving each R-group
+torsion its own bespoke parameter. It runs the series with **bespoke** SMIRKS, skips the
+per-molecule fit, and then runs **one** pooled ForceBalance optimization in which:
+
+- each **unique fragment torsion** (by fragment CMILES + scanned dihedral) is fit **once**;
+- a torsion **shared** across the series (same fragment) therefore appears once and is fit
+  consistently — the *scaffold-joint* half;
+- a torsion **unique** to one molecule keeps its **own** bespoke parameter — the
+  *R-group-bespoke* half.
+
+Each scanned torsion is linked to its bespoke parameter by matching the parameter's SMIRKS
+to the scanned central dihedral (ChemPer SMIRKS aren't guaranteed identical across
+molecules, so they're pooled by fragment identity, not by SMIRKS string). The fit is run
+against a merged force field — the base plus every molecule's bespoke parameters — and the
+fitted bespoke torsions are then merged onto the tmd base. Because bespoke SMIRKS are more
+specific than the base's generic patterns, they are **appended** (not string-overridden)
+and win per-atom via SMIRNOFF's most-specific-match rule (so expect "appended N" rather
+than "overrode N").
+
+### How a torsion is classified as shared vs R-group
+
+Classification is by **fragment identity** (fragment CMILES + scanned dihedral), and a
+torsion counts as **shared the moment its fragment appears in ≥ 2 molecules** — there is
+**no majority cutoff**. A torsion in 10/12, 3/12, or even 2/12 molecules is all treated the
+same: shared. Only a torsion that appears in **exactly one** molecule is "unique" (R-group).
+
+Crucially, the hybrid *fit itself applies no threshold* — it simply de-duplicates by
+fragment identity, so a shared torsion's identical (cached) drives collapse to one and are
+fit once (one consistent value applied to every molecule that has it), while a unique
+torsion stays on its own. "Shared vs R-group" is therefore an emergent consequence of
+de-duplication, not a branch in the code. The `≥ 2` threshold only labels the buckets in
+the **torsion-fit diagnostic** (`recurring_threshold`, default 2); changing it re-labels
+the report but does not change how anything is fit.
+
+Two consequences worth knowing:
+
+- It keys on the **fragment**, not the abstract chemical torsion. If 8 of those 12
+  molecules produce an identical fragment but 2 have a slightly different local environment
+  (an R-group close enough to bleed into the fragment), you get *two* identities — one
+  shared by 8, one shared by 2 — and **both** are still "shared" (each ≥ 2). That's
+  intentional: fragment recurrence captures whether the local chemistry is genuinely the
+  same.
+- A shared torsion need not appear in *all* molecules; the 2 molecules without it just
+  don't carry that torsion, and the one fitted value applies to the 10 that do.
+
+```
+openff-bespoke executor run-series --hybrid \
+  --file ligands.sdf --workflow default \
+  --default-qc-spec xtb gfn2xtb none --single-point-qc-spec psi4 b3lyp-d3bj dzvp \
+  --base-tmd-ff project_base.py --output bespoke_tmd_ff.py \
+  --forcebalance-workers 48 --n-qc-compute-workers 1 --qc-compute-n-cores 48
+```
+
+**When to use it:** only when the torsion-fit diagnostic shows R-group torsions fitting
+meaningfully worse than the scaffold under `--joint`. If they fit comparably, `--joint` is
+simpler and sufficient. (`--hybrid` produces more, more-specific parameters and is more
+sensitive to QC data quality for the unique torsions.)
 
 ---
 

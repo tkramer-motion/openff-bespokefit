@@ -114,6 +114,7 @@ def _to_input_schema(
     default_qc_spec: Optional[Tuple[str, str, str]],
     single_point_qc_spec: Optional[Tuple[str, str, str]],
     broad_smirks: bool,
+    skip_optimization: bool,
     workflow_name: Optional[str],
     workflow_file_name: Optional[str],
 ) -> "BespokeOptimizationSchema":
@@ -239,10 +240,10 @@ def _to_input_schema(
     else:
         schema = workflow_factory.optimization_schema_from_molecule(molecule)
 
-        if broad_smirks:
-            # Joint mode: skip the per-molecule fit. The executor still generates the QC
-            # (and the broad SMIRKS + reference data are retained on the result); a single
-            # joint fit over the whole series does the actual optimization.
+        if skip_optimization:
+            # Pooled modes (joint/hybrid): skip the per-molecule fit. The executor still
+            # generates the QC (and the SMIRKS + reference data are retained on the
+            # result); a single pooled fit over the whole series does the optimization.
             for stage in schema.stages:
                 stage.skip_optimization = True
 
@@ -262,6 +263,7 @@ def _submit(
     allow_multiple_molecules: bool,
     save_submission: bool,
     broad_smirks: bool = False,
+    skip_optimization: bool = False,
 ) -> List[str]:
     from openff.toolkit.topology import Molecule
 
@@ -328,6 +330,7 @@ def _submit(
                 default_qc_spec,
                 single_point_qc_spec,
                 broad_smirks,
+                skip_optimization,
                 workflow_name,
                 workflow_file_name,
             )

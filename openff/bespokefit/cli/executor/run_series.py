@@ -68,6 +68,7 @@ def _run_series_cli(
     base_tmd_ff_path: str,
     openff_base: str,
     joint: bool,
+    hybrid: bool,
     forcebalance_workers: int,
     forcebalance_wq_port: Optional[int],
     diagnose_fit: bool,
@@ -151,19 +152,19 @@ def _run_series_cli(
             exit_code=2,
         )
 
-    if forcebalance_workers and not joint:
+    if forcebalance_workers and not (joint or hybrid):
         console.print(
             Padding(
-                "[[yellow]![/yellow]] --forcebalance-workers only applies to --joint "
-                "fits and will be ignored; per-molecule fits already run in parallel "
-                "across --n-optimizer-workers.",
+                "[[yellow]![/yellow]] --forcebalance-workers only applies to --joint / "
+                "--hybrid fits and will be ignored; per-molecule fits already run in "
+                "parallel across --n-optimizer-workers.",
                 (1, 0, 1, 0),
             )
         )
 
     # Fail now (not after hours of QC) if parallel ForceBalance was requested but cctools
     # is unavailable.
-    if joint and forcebalance_workers:
+    if (joint or hybrid) and forcebalance_workers:
         import shutil
 
         if shutil.which("work_queue_worker") is None:
@@ -242,7 +243,8 @@ def _run_series_cli(
                 workflow_file_name=workflow_file_name,
                 allow_multiple_molecules=True,
                 save_submission=False,
-                broad_smirks=joint,
+                broad_smirks=joint and not hybrid,
+                skip_optimization=joint or hybrid,
             )
 
             console.print(Padding("3. running the fitting pipeline", (1, 0, 1, 0)))
@@ -289,8 +291,9 @@ def _run_series_cli(
 
     console.print(Padding("4. building the tmd force field", (1, 0, 1, 0)))
 
-    if joint:
+    if joint or hybrid:
         from openff.bespokefit._joint_fit import (
+            build_hybrid_stage,
             build_joint_stage,
             run_joint_optimization,
         )
@@ -301,31 +304,45 @@ def _run_series_cli(
             if results is None or results.input_schema is None:
                 exit_with_messages(
                     "[[red]ERROR[/red]] a completed optimization did not return its "
-                    "input schema with QC data, which the joint fit requires.",
+                    "input schema with QC data, which a pooled fit requires.",
                     console=console,
                     exit_code=2,
                 )
             input_schemas.append(results.input_schema)
 
+        mode_name = "hybrid" if hybrid else "joint"
         worker_note = (
             f" using [blue]{forcebalance_workers}[/blue] ForceBalance worker(s)"
             if forcebalance_workers
             else ""
         )
         console.print(
-            f"running a single joint ForceBalance fit over "
+            f"running a single {mode_name} ForceBalance fit over "
             f"[blue]{len(input_schemas)}[/blue] molecule(s){worker_note}"
         )
 
-        stage = build_joint_stage(input_schemas)
-        base_openff = ForceField(
-            input_schemas[0].initial_force_field, allow_cosmetic_attributes=True
-        )
-        with console.status("running the joint ForceBalance optimization"):
+        if hybrid:
+            # Bespoke SMIRKS pooled by fragment identity; each scanned torsion keeps its
+            # own bespoke parameter, shared scaffold torsions appear once. The merged
+            # force field (base + every contributing molecule's bespoke parameters) is
+            # what ForceBalance optimizes; the fitted torsions are new vs the pure base.
+            stage, initial_force_field_xml = build_hybrid_stage(input_schemas)
+            pooled_initial_ff = ForceField(
+                initial_force_field_xml, allow_cosmetic_attributes=True
+            )
+            base_openff = ForceField(force_field_path, allow_cosmetic_attributes=True)
+        else:
+            stage = build_joint_stage(input_schemas)
+            pooled_initial_ff = ForceField(
+                input_schemas[0].initial_force_field, allow_cosmetic_attributes=True
+            )
+            base_openff = pooled_initial_ff
+
+        with console.status(f"running the {mode_name} ForceBalance optimization"):
             refit_force_fields = [
                 run_joint_optimization(
                     stage,
-                    base_openff,
+                    pooled_initial_ff,
                     root_directory="joint-fit",
                     n_workers=forcebalance_workers,
                     wq_port=forcebalance_wq_port,
@@ -333,7 +350,9 @@ def _run_series_cli(
             ]
 
         if diagnose_fit:
-            with console.status("scoring the joint fit against QM (MM vs QM RMSE)"):
+            with console.status(
+                f"scoring the {mode_name} fit against QM (MM vs QM RMSE)"
+            ):
                 fit_report = torsion_fit_residual_report(
                     refit_force_fields[0],
                     stage.targets,
@@ -451,6 +470,20 @@ __run_series_options.insert(
 __run_series_options.insert(
     8,
     click.option(
+        "--hybrid/--no-hybrid",
+        "hybrid",
+        default=False,
+        show_default=True,
+        help="Hybrid fit (takes precedence over --joint): use bespoke SMIRKS but run one "
+        "pooled ForceBalance fit in which each unique fragment torsion is fit once -- "
+        "shared scaffold torsions consistently, R-group torsions with their own bespoke "
+        "parameters. Best when R-group torsions fit poorly under --joint (see the "
+        "torsion-fit diagnostic).",
+    ),
+)
+__run_series_options.insert(
+    9,
+    click.option(
         "--forcebalance-workers",
         "forcebalance_workers",
         type=click.INT,
@@ -463,7 +496,7 @@ __run_series_options.insert(
     ),
 )
 __run_series_options.insert(
-    9,
+    10,
     click.option(
         "--forcebalance-wq-port",
         "forcebalance_wq_port",
@@ -474,7 +507,7 @@ __run_series_options.insert(
     ),
 )
 __run_series_options.insert(
-    10,
+    11,
     click.option(
         "--diagnose-fit/--no-diagnose-fit",
         "diagnose_fit",

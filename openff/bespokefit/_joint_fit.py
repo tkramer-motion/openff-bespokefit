@@ -364,6 +364,137 @@ def build_joint_stage(per_molecule_schemas: List):
     )
 
 
+def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
+    """Build one pooled ``OptimizationStageSchema`` for a **hybrid** fit and the initial
+    force field it must be optimized against.
+
+    The series is run with *bespoke* SMIRKS, so every scanned torsion has a molecule-
+    specific parameter. Here each **unique fragment torsion** (by identity) contributes
+    exactly one bespoke parameter and one QC target, taken from the first molecule that
+    has it:
+
+    * a torsion shared across the series (same fragment) appears **once** -> fit once,
+      consistently (the scaffold-joint half); and
+    * a torsion unique to one molecule keeps its **own** bespoke parameter (the R-group-
+      bespoke half).
+
+    Because ChemPer-generated bespoke SMIRKS are not guaranteed identical across parent
+    molecules for the same fragment, parameters are *not* pooled by SMIRKS string. Instead
+    each scanned torsion is linked to its parameter by matching the parameter's SMIRKS to
+    the scanned (central) dihedral of the fragment, and only the first occurrence of each
+    fragment identity is kept.
+
+    Returns ``(stage, initial_force_field_xml)`` where the force field is the base plus
+    every contributing molecule's bespoke parameters (with their initial values), so
+    ForceBalance can look up each pooled parameter.
+    """
+    from openff.toolkit import ForceField, Molecule
+
+    from openff.bespokefit.schema.fitting import OptimizationStageSchema
+
+    if not per_molecule_schemas:
+        raise ValueError("No per-molecule schemas were provided for the hybrid fit.")
+
+    template = per_molecule_schemas[0].stages[-1]
+    merged_force_field = ForceField(
+        per_molecule_schemas[0].initial_force_field, allow_cosmetic_attributes=True
+    )
+    merged_handler = merged_force_field.get_parameter_handler("ProperTorsions")
+    merged_smirks = {parameter.smirks for parameter in merged_handler.parameters}
+
+    seen = set()
+    pooled_parameters = []
+    pooled_parameter_smirks = set()
+    pooled_targets = []
+
+    for schema in per_molecule_schemas:
+        stage = schema.stages[-1]
+        molecule_handler = ForceField(
+            schema.initial_force_field, allow_cosmetic_attributes=True
+        ).get_parameter_handler("ProperTorsions")
+        molecule_parameters = {p.smirks: p for p in molecule_handler.parameters}
+
+        for target in stage.targets:
+            if not _has_qc_data(target.reference_data):
+                raise ValueError(
+                    "A hybrid fitting target is missing its QC reference data."
+                )
+
+            new_records = []
+            for record in target.reference_data.qc_records:
+                identity = _torsion_record_identity(record)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                new_records.append(record)
+
+                cmiles = (
+                    getattr(record.initial_molecule[0], "extras", None) or {}
+                ).get("canonical_isomeric_explicit_hydrogen_mapped_smiles")
+                dihedrals = getattr(
+                    getattr(record, "keywords", None), "dihedrals", None
+                )
+                if cmiles is None or not dihedrals:
+                    continue
+
+                central = tuple(dihedrals[0])
+                fragment = Molecule.from_mapped_smiles(
+                    cmiles, allow_undefined_stereo=True
+                )
+
+                # Link the scanned torsion to the bespoke parameter(s) that match its
+                # central dihedral, keeping each parameter (and its values) only once.
+                for smirks, parameter in stage_parameter_items(stage):
+                    if smirks in pooled_parameter_smirks:
+                        continue
+                    matches = fragment.chemical_environment_matches(smirks)
+                    if not any(
+                        tuple(match) == central or tuple(reversed(match)) == central
+                        for match in matches
+                    ):
+                        continue
+                    pooled_parameters.append(parameter)
+                    pooled_parameter_smirks.add(smirks)
+                    if smirks not in merged_smirks and smirks in molecule_parameters:
+                        merged_handler.add_parameter(
+                            parameter=molecule_parameters[smirks]
+                        )
+                        merged_smirks.add(smirks)
+
+            if new_records:
+                pooled_targets.append(
+                    target.copy(
+                        update={
+                            "reference_data": target.reference_data.copy(
+                                update={"qc_records": new_records}
+                            )
+                        }
+                    )
+                )
+
+    if not pooled_parameters:
+        raise ValueError(
+            "No bespoke parameters could be linked to the pooled targets for the hybrid "
+            "fit."
+        )
+    if not pooled_targets:
+        raise ValueError("No fitting targets with QC data were found across the series.")
+
+    stage = OptimizationStageSchema(
+        optimizer=template.optimizer,
+        parameters=pooled_parameters,
+        parameter_hyperparameters=template.parameter_hyperparameters,
+        targets=pooled_targets,
+    )
+    return stage, merged_force_field.to_string(discard_cosmetic_attributes=True)
+
+
+def stage_parameter_items(stage):
+    """Yield ``(smirks, parameter)`` for a stage's parameters (duck-typed helper)."""
+    for parameter in stage.parameters:
+        yield parameter.smirks, parameter
+
+
 def _find_free_port() -> int:
     """Return a currently free TCP port on the local host."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
