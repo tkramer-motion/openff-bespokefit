@@ -358,7 +358,9 @@ def _run_series_cli(
             # own bespoke parameter, shared scaffold torsions appear once. The merged
             # force field (base + every contributing molecule's bespoke parameters) is
             # what ForceBalance optimizes; the fitted torsions are new vs the pure base.
-            stage, initial_force_field_xml = build_hybrid_stage(input_schemas)
+            stage, initial_force_field_xml = build_hybrid_stage(
+                input_schemas, base_force_field=force_field_path
+            )
             pooled_initial_ff = ForceField(
                 initial_force_field_xml, allow_cosmetic_attributes=True
             )

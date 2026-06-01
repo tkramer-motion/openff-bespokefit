@@ -364,7 +364,9 @@ def build_joint_stage(per_molecule_schemas: List):
     )
 
 
-def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
+def build_hybrid_stage(
+    per_molecule_schemas: List, base_force_field: Optional[str] = None
+) -> Tuple[object, str]:
     """Build one pooled ``OptimizationStageSchema`` for a **hybrid** fit and the initial
     force field it must be optimized against.
 
@@ -404,11 +406,20 @@ def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
 
     template = per_molecule_schemas[0].stages[-1]
 
+    if base_force_field is None:
+        # Each schema's ``initial_force_field`` is NOT the clean base: the executor
+        # rewrites it to ``base + that molecule's full bespoke set`` (most of which is
+        # never the applied parameter for a scanned torsion). Without the real base we
+        # cannot tell base from bespoke, and molecule 0's unfit bespoke parameters would
+        # leak into the output at their initial values.
+        raise ValueError(
+            "build_hybrid_stage requires the clean base force field (base_force_field) "
+            "to separate base parameters from bespoke ones."
+        )
+
     base_smirks = {
         parameter.smirks
-        for parameter in ForceField(
-            per_molecule_schemas[0].initial_force_field, allow_cosmetic_attributes=True
-        )
+        for parameter in ForceField(base_force_field, allow_cosmetic_attributes=True)
         .get_parameter_handler("ProperTorsions")
         .parameters
     }
@@ -524,12 +535,17 @@ def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
         for smirks in applied_smirks
     ]
 
-    # Rebuild the initial force field as base + only the applied bespoke parameters, so
-    # unfit (never-applied) duplicates do not leak into the output at their base values.
+    # Rebuild the initial force field as the CLEAN base + only the applied bespoke
+    # parameters. Starting from a schema's initial_force_field would drag in molecule 0's
+    # full bespoke set (the executor bakes it in), most of which is never the applied
+    # parameter for any scanned torsion -- those would ride along unfit at their base
+    # values and be collected into the output (the "collected 64 but only fit 20" leak).
     # Dropping non-applied parameters cannot change which parameter wins for any scanned
-    # torsion (the winner is kept), so the assignment above still holds.
+    # torsion (the winner is always an applied SMIRKS, which is kept), so the assignment
+    # read above still holds. Applied bespoke SMIRKS are appended in order so they remain
+    # more specific than the base patterns and win per SMIRNOFF's most-specific-match.
     initial_force_field = ForceField(
-        per_molecule_schemas[0].initial_force_field, allow_cosmetic_attributes=True
+        base_force_field, allow_cosmetic_attributes=True
     )
     initial_handler = initial_force_field.get_parameter_handler("ProperTorsions")
     initial_smirks = {parameter.smirks for parameter in initial_handler.parameters}
