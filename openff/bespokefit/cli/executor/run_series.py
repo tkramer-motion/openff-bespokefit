@@ -326,6 +326,7 @@ def _run_series_cli(
         from openff.bespokefit._joint_fit import (
             build_hybrid_stage,
             build_joint_stage,
+            count_moved_parameters,
             run_joint_optimization,
         )
 
@@ -379,6 +380,30 @@ def _run_series_cli(
                     wq_port=forcebalance_wq_port,
                 )
             ]
+
+        # Confirm the fit actually moved the parameters it targeted. If the optimized
+        # parameters are not the ones the force field applies to the scanned torsions
+        # they receive no gradient and stay at their initial values -- the failure mode
+        # the hybrid assignment logic exists to prevent -- so surface it loudly.
+        n_moved, n_target = count_moved_parameters(
+            pooled_initial_ff, refit_force_fields[0], stage
+        )
+        if n_target:
+            marker = "green]✓" if n_moved == n_target else "yellow]!"
+            console.print(
+                f"[[{marker}[/] the {mode_name} fit moved [blue]{n_moved}[/blue]/"
+                f"[blue]{n_target}[/blue] targeted torsion parameter(s) off their "
+                f"initial values"
+            )
+            if n_moved < n_target:
+                console.print(
+                    Padding(
+                        f"[[yellow]![/yellow]] {n_target - n_moved} parameter(s) did not "
+                        f"move -- they were not the parameter applied to their scanned "
+                        f"torsion, so the fit could not constrain them",
+                        (0, 0, 0, 1),
+                    )
+                )
 
         if diagnose_fit:
             with console.status(

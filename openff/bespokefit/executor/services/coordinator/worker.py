@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import time
 import traceback
@@ -44,34 +45,48 @@ async def _process_task(task_id: int) -> bool:
     if task.status == "success" or task.status == "errored":
         return True
 
-    if task.running_stage is None:
-        task.running_stage = task.pending_stages.pop(0)
-        await task.running_stage.enter(task)
+    try:
+        if task.running_stage is None:
+            task.running_stage = task.pending_stages.pop(0)
+            await task.running_stage.enter(task)
 
-    stage_status = task.running_stage.status
-    await task.running_stage.update()
+        stage_status = task.running_stage.status
+        await task.running_stage.update()
 
-    task_state_message = f"[task id={task_id}] transitioned from {{0}} -> {{1}}"
+        task_state_message = f"[task id={task_id}] transitioned from {{0}} -> {{1}}"
 
-    if task.status != task_status and task_status == "waiting":
-        print(task_state_message.format(task_status, task.status), flush=True)
+        if task.status != task_status and task_status == "waiting":
+            print(task_state_message.format(task_status, task.status), flush=True)
 
-    if stage_status != task.running_stage.status:
-        print(
-            f"[task id={task_id}] {task.running_stage.type} transitioned from "
-            f"{stage_status} -> {task.running_stage.status}",
-            flush=True,
-        )
+        if stage_status != task.running_stage.status:
+            print(
+                f"[task id={task_id}] {task.running_stage.type} transitioned from "
+                f"{stage_status} -> {task.running_stage.status}",
+                flush=True,
+            )
 
-    if task.running_stage.status in {"success", "errored"}:
-        task.completed_stages.append(task.running_stage)
-        task.running_stage = None
+        if task.running_stage.status in {"success", "errored"}:
+            task.completed_stages.append(task.running_stage)
+            task.running_stage = None
 
-    if task.status != task_status and task_status != "waiting":
-        print(task_state_message.format(task_status, task.status), flush=True)
+        if task.status != task_status and task_status != "waiting":
+            print(task_state_message.format(task_status, task.status), flush=True)
+    except Exception as e:  # noqa: BLE001 - surface, don't silently re-process
+        # If processing this task raises, the cycle's broad handler would otherwise
+        # swallow it and re-enter this task next cycle without advancing it - which
+        # manifests as repeated stage transitions and an eventual silent drop. Instead
+        # fail the task once, loudly, with the real error so the client can report it.
+        _logger.exception("error while processing task %s", task_id)
+        if task.running_stage is None and task.pending_stages:
+            task.running_stage = task.pending_stages.pop(0)
+        if task.running_stage is not None:
+            task.running_stage.status = "errored"
+            task.running_stage.error = json.dumps(f"{type(e).__name__}: {str(e)}")
+            task.completed_stages.append(task.running_stage)
+            task.running_stage = None
 
     save_task(task)
-    return False
+    return task.status in ("success", "errored")
 
 
 async def cycle():  # pragma: no cover

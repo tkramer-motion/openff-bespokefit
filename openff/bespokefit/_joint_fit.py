@@ -369,51 +369,81 @@ def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
     force field it must be optimized against.
 
     The series is run with *bespoke* SMIRKS, so every scanned torsion has a molecule-
-    specific parameter. Here each **unique fragment torsion** (by identity) contributes
-    exactly one bespoke parameter and one QC target, taken from the first molecule that
-    has it:
+    specific parameter. Each **unique fragment torsion** (by identity) contributes one QC
+    target, taken from the first molecule that has it, so:
 
     * a torsion shared across the series (same fragment) appears **once** -> fit once,
       consistently (the scaffold-joint half); and
     * a torsion unique to one molecule keeps its **own** bespoke parameter (the R-group-
       bespoke half).
 
-    Because ChemPer-generated bespoke SMIRKS are not guaranteed identical across parent
-    molecules for the same fragment, parameters are *not* pooled by SMIRKS string. Instead
-    each scanned torsion is linked to its parameter by matching the parameter's SMIRKS to
-    the scanned (central) dihedral of the fragment, and only the first occurrence of each
-    fragment identity is kept.
+    The subtlety that makes this correct: ChemPer mints a *different* bespoke SMIRKS per
+    parent for the same fragment, and a congeneric series shares scaffold, so when every
+    molecule's bespoke SMIRKS live in one force field OpenFF's "last match wins" rule can
+    assign a scanned torsion a parameter that was minted from a *different* molecule.
+    Marking the parameter we *think* owns a torsion (by SMIRKS-matching the central
+    dihedral) then marks one that is never the applied one for ~half the torsions: it
+    receives no gradient and ForceBalance leaves it at its base value, while the genuinely
+    applied parameter is left unfit. So instead we build the complete merged force field
+    first and then, for each scanned torsion, optimize **exactly the parameter the merged
+    force field actually assigns to it** (via :meth:`label_molecules`). Parameters never
+    assigned to any scanned torsion are pruned so unfit, base-valued duplicates cannot
+    leak into the output.
 
     Returns ``(stage, initial_force_field_xml)`` where the force field is the base plus
-    every contributing molecule's bespoke parameters (with their initial values), so
+    the bespoke parameters that are actually applied (with their initial values), so
     ForceBalance can look up each pooled parameter.
     """
     from openff.toolkit import ForceField, Molecule
 
     from openff.bespokefit.schema.fitting import OptimizationStageSchema
+    from openff.bespokefit.schema.smirnoff import ProperTorsionSMIRKS
 
     if not per_molecule_schemas:
         raise ValueError("No per-molecule schemas were provided for the hybrid fit.")
 
     template = per_molecule_schemas[0].stages[-1]
+
+    base_smirks = {
+        parameter.smirks
+        for parameter in ForceField(
+            per_molecule_schemas[0].initial_force_field, allow_cosmetic_attributes=True
+        )
+        .get_parameter_handler("ProperTorsions")
+        .parameters
+    }
+
+    # --- Phase 1: assemble the COMPLETE merged force field (base + every molecule's
+    # bespoke torsions) and the de-duplicated set of scanned-torsion sites. -------------
     merged_force_field = ForceField(
         per_molecule_schemas[0].initial_force_field, allow_cosmetic_attributes=True
     )
     merged_handler = merged_force_field.get_parameter_handler("ProperTorsions")
     merged_smirks = {parameter.smirks for parameter in merged_handler.parameters}
 
+    # The fit-spec objects (which carry *which* attributes to optimize), keyed by SMIRKS
+    # across the whole series.
+    fit_spec_by_smirks = {}
+    for schema in per_molecule_schemas:
+        for parameter in schema.stages[-1].parameters:
+            fit_spec_by_smirks.setdefault(parameter.smirks, parameter)
+
     seen = set()
-    pooled_parameters = []
-    pooled_parameter_smirks = set()
     targets_by_type = {}
     type_order = []
+    scanned_sites = []  # (cmiles, central dihedral) per unique scanned torsion
 
     for schema in per_molecule_schemas:
         stage = schema.stages[-1]
         molecule_handler = ForceField(
             schema.initial_force_field, allow_cosmetic_attributes=True
         ).get_parameter_handler("ProperTorsions")
-        molecule_parameters = {p.smirks: p for p in molecule_handler.parameters}
+        # Every molecule's bespoke torsions must be present before we label, so the
+        # assignment we read reflects the force field the fit will actually use.
+        for parameter in molecule_handler.parameters:
+            if parameter.smirks not in merged_smirks:
+                merged_handler.add_parameter(parameter=parameter)
+                merged_smirks.add(parameter.smirks)
 
         for target in stage.targets:
             if not _has_qc_data(target.reference_data):
@@ -435,32 +465,8 @@ def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
                 dihedrals = getattr(
                     getattr(record, "keywords", None), "dihedrals", None
                 )
-                if cmiles is None or not dihedrals:
-                    continue
-
-                central = tuple(dihedrals[0])
-                fragment = Molecule.from_mapped_smiles(
-                    cmiles, allow_undefined_stereo=True
-                )
-
-                # Link the scanned torsion to the bespoke parameter(s) that match its
-                # central dihedral, keeping each parameter (and its values) only once.
-                for smirks, parameter in stage_parameter_items(stage):
-                    if smirks in pooled_parameter_smirks:
-                        continue
-                    matches = fragment.chemical_environment_matches(smirks)
-                    if not any(
-                        tuple(match) == central or tuple(reversed(match)) == central
-                        for match in matches
-                    ):
-                        continue
-                    pooled_parameters.append(parameter)
-                    pooled_parameter_smirks.add(smirks)
-                    if smirks not in merged_smirks and smirks in molecule_parameters:
-                        merged_handler.add_parameter(
-                            parameter=molecule_parameters[smirks]
-                        )
-                        merged_smirks.add(smirks)
+                if cmiles is not None and dihedrals:
+                    scanned_sites.append((cmiles, tuple(dihedrals[0])))
 
             if new_records:
                 # Merge every molecule's unique records into a single target per type.
@@ -472,6 +478,65 @@ def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
                     targets_by_type[target_type] = [target, []]
                     type_order.append(target_type)
                 targets_by_type[target_type][1].extend(new_records)
+
+    # --- Phase 2: optimize exactly the parameter the merged force field assigns to each
+    # scanned torsion (see the docstring for why SMIRKS-matching is not enough). --------
+    labels_by_cmiles = {}
+    applied_smirks = []
+    applied_set = set()
+    unassigned = 0
+    for cmiles, central in scanned_sites:
+        labels = labels_by_cmiles.get(cmiles)
+        if labels is None:
+            molecule = Molecule.from_mapped_smiles(
+                cmiles, allow_undefined_stereo=True
+            )
+            labels = merged_force_field.label_molecules(molecule.to_topology())[0][
+                "ProperTorsions"
+            ]
+            labels_by_cmiles[cmiles] = labels
+
+        # ValenceDict normalizes torsion keys (i,j,k,l)==(l,k,j,i) in __getitem__, but
+        # not necessarily in .get(); index with a fallback so atom-ordering can't miss.
+        try:
+            parameter = labels[central]
+        except KeyError:
+            try:
+                parameter = labels[tuple(reversed(central))]
+            except KeyError:
+                unassigned += 1
+                continue
+        if parameter.smirks not in applied_set:
+            applied_set.add(parameter.smirks)
+            applied_smirks.append(parameter.smirks)
+
+    if unassigned:
+        _logger.warning(
+            "hybrid fit: %d scanned torsion(s) had no proper-torsion parameter assigned "
+            "and were skipped.",
+            unassigned,
+        )
+
+    # Parameters to optimize = exactly those assigned to a scanned torsion.
+    pooled_parameters = [
+        fit_spec_by_smirks.get(smirks)
+        or ProperTorsionSMIRKS.from_smirnoff(merged_handler.parameters[smirks])
+        for smirks in applied_smirks
+    ]
+
+    # Rebuild the initial force field as base + only the applied bespoke parameters, so
+    # unfit (never-applied) duplicates do not leak into the output at their base values.
+    # Dropping non-applied parameters cannot change which parameter wins for any scanned
+    # torsion (the winner is kept), so the assignment above still holds.
+    initial_force_field = ForceField(
+        per_molecule_schemas[0].initial_force_field, allow_cosmetic_attributes=True
+    )
+    initial_handler = initial_force_field.get_parameter_handler("ProperTorsions")
+    initial_smirks = {parameter.smirks for parameter in initial_handler.parameters}
+    for smirks in applied_smirks:
+        if smirks not in initial_smirks:
+            initial_handler.add_parameter(parameter=merged_handler.parameters[smirks])
+            initial_smirks.add(smirks)
 
     pooled_targets = [
         template.copy(
@@ -493,19 +558,66 @@ def build_hybrid_stage(per_molecule_schemas: List) -> Tuple[object, str]:
     if not pooled_targets:
         raise ValueError("No fitting targets with QC data were found across the series.")
 
+    n_bespoke = sum(1 for smirks in applied_smirks if smirks not in base_smirks)
+    _logger.info(
+        "hybrid fit: optimizing %d parameter(s) (%d bespoke, %d inherited) actually "
+        "assigned to %d scanned torsion(s).",
+        len(pooled_parameters),
+        n_bespoke,
+        len(pooled_parameters) - n_bespoke,
+        len(scanned_sites),
+    )
+
     stage = OptimizationStageSchema(
         optimizer=template.optimizer,
         parameters=pooled_parameters,
         parameter_hyperparameters=template.parameter_hyperparameters,
         targets=pooled_targets,
     )
-    return stage, merged_force_field.to_string(discard_cosmetic_attributes=True)
+    return stage, initial_force_field.to_string(discard_cosmetic_attributes=True)
 
 
 def stage_parameter_items(stage):
     """Yield ``(smirks, parameter)`` for a stage's parameters (duck-typed helper)."""
     for parameter in stage.parameters:
         yield parameter.smirks, parameter
+
+
+def count_moved_parameters(initial_force_field, refit_force_field, stage) -> Tuple[int, int]:
+    """Return ``(n_moved, n_total)`` proper-torsion parameters that the fit actually
+    changed, comparing each optimized parameter's force constants before vs after.
+
+    This is the automatic form of "did the fit move the parameters it was supposed to":
+    a hybrid (or joint) fit in which the optimized parameters are not the ones the force
+    field actually applies to the scanned torsions leaves them ungradiented at their
+    initial values, so ``n_moved`` would be ~0. Returns ``(0, 0)`` if it cannot evaluate.
+    """
+    try:
+        initial = initial_force_field.get_parameter_handler("ProperTorsions")
+        refit = refit_force_field.get_parameter_handler("ProperTorsions")
+    except Exception:
+        return 0, 0
+
+    def _ks(handler, smirks):
+        try:
+            parameter = handler.parameters[smirks]
+        except Exception:
+            return None
+        return tuple(
+            round(value.m_as("kilojoule / mole"), 6) for value in (parameter.k or [])
+        )
+
+    n_moved = n_total = 0
+    for parameter in getattr(stage, "parameters", []):
+        before = _ks(initial, parameter.smirks)
+        after = _ks(refit, parameter.smirks)
+        if before is None or after is None:
+            continue
+        n_total += 1
+        if before != after:
+            n_moved += 1
+
+    return n_moved, n_total
 
 
 def _find_free_port() -> int:

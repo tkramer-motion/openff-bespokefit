@@ -281,14 +281,29 @@ per-molecule fit, and then runs **one** pooled ForceBalance optimization in whic
 - a torsion **unique** to one molecule keeps its **own** bespoke parameter — the
   *R-group-bespoke* half.
 
-Each scanned torsion is linked to its bespoke parameter by matching the parameter's SMIRKS
-to the scanned central dihedral (ChemPer SMIRKS aren't guaranteed identical across
-molecules, so they're pooled by fragment identity, not by SMIRKS string). The fit is run
-against a merged force field — the base plus every molecule's bespoke parameters — and the
-fitted bespoke torsions are then merged onto the tmd base. Because bespoke SMIRKS are more
-specific than the base's generic patterns, they are **appended** (not string-overridden)
-and win per-atom via SMIRNOFF's most-specific-match rule (so expect "appended N" rather
-than "overrode N").
+The fit is run against a merged force field — the base plus every molecule's bespoke
+parameters — and the fitted bespoke torsions are then merged onto the tmd base. Because
+bespoke SMIRKS are more specific than the base's generic patterns, they are **appended**
+(not string-overridden) and win per-atom via SMIRNOFF's most-specific-match rule (so expect
+"appended N" rather than "overrode N").
+
+**Which parameter each torsion is fit through (and why it matters).** ChemPer mints a
+*different* bespoke SMIRKS per parent for the same fragment, and a congeneric series shares
+scaffold — so when every molecule's bespoke SMIRKS coexist in one force field, SMIRNOFF's
+"last match wins" can assign a scanned torsion a parameter that was minted from a
+*different* molecule. The fit therefore does **not** mark "the parameter whose SMIRKS
+matches this torsion"; it builds the complete merged force field first and then, for each
+scanned torsion, optimizes **exactly the parameter the force field actually assigns to it**
+(read back with `label_molecules`). Parameters never applied to any scanned torsion are
+pruned, so unfit, base-valued duplicates can't leak into the output. (An earlier version
+marked the SMIRKS-matching parameter, which for ~half the torsions was *not* the applied
+one: it got no gradient and stayed at its base value while the genuinely applied parameter
+went unfit — producing a force field whose bespoke torsions were mostly base copies.)
+
+After the fit, run-series prints how many targeted parameters actually moved off their
+initial values, e.g. `✓ the hybrid fit moved 47/47 targeted torsion parameter(s) off their
+initial values`. A count well below the total means parameters weren't the applied ones and
+the fit couldn't constrain them — the failure mode the assignment logic prevents.
 
 ### How a torsion is classified as shared vs R-group
 
