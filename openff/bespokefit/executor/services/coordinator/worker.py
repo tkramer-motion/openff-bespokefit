@@ -20,7 +20,6 @@ from openff.bespokefit.executor.services.coordinator.storage import (
     TaskStatus,
     get_n_tasks,
     get_task,
-    peek_task_status,
     pop_task_status,
     push_task_status,
     save_task,
@@ -106,34 +105,43 @@ async def cycle():  # pragma: no cover
             # they have finished, so as to figure out how many new tasks can be moved
             # from running to waiting.
 
-            task_id = peek_task_status(TaskStatus.running)
+            # Claim each running task by POPPING it, process THAT task, then move it on
+            # based on ITS OWN result. This must not be a peek-then-pop split: peeking the
+            # head, processing it, then popping "the head" again can move a *different*
+            # task than the one processed (the head may change across the awaits), which
+            # applies one task's `has_finished` verdict to another -- pushing an
+            # unfinished task to 'complete' and orphaning it (its stage stuck 'running'
+            # forever while the client's wait_until_complete hangs indefinitely).
             processed_task_ids = set()
+            task_id = pop_task_status(TaskStatus.running)
 
             while task_id is not None:
                 if task_id in processed_task_ids:
+                    # We've cycled through every task currently in the running queue
+                    # (this one was already handled and re-queued as unfinished). Put it
+                    # back untouched and stop for this cycle.
+                    push_task_status(task_id, TaskStatus.running)
                     break
 
-                has_finished = await _process_task(task_id)
-                _debug_info["tasks_processed"] += 1
-                # Needed to let other async threads run even if there are hundreds of
-                # tasks running
-                await asyncio.sleep(0.0)
+                try:
+                    has_finished = await _process_task(task_id)
+                    _debug_info["tasks_processed"] += 1
+                    # Needed to let other async threads run even if there are hundreds of
+                    # tasks running
+                    await asyncio.sleep(0.0)
+                except BaseException:
+                    # The task is currently claimed (out of every queue); never leave it
+                    # orphaned on error -- put it back on 'running' so it is retried.
+                    push_task_status(task_id, TaskStatus.running)
+                    raise
 
-                # Pop the task we just processed and move it on. The pop can return None
-                # if the running queue drained between the peek above and here (an
-                # end-of-run race); guard against pushing None, which Redis cannot encode.
-                popped_task_id = pop_task_status(TaskStatus.running)
-                if popped_task_id is not None:
-                    push_task_status(
-                        popped_task_id,
-                        TaskStatus.running
-                        if not has_finished
-                        else TaskStatus.complete,
-                    )
-
+                push_task_status(
+                    task_id,
+                    TaskStatus.complete if has_finished else TaskStatus.running,
+                )
                 processed_task_ids.add(task_id)
 
-                task_id = peek_task_status(TaskStatus.running)
+                task_id = pop_task_status(TaskStatus.running)
 
             n_running_tasks = get_n_tasks(TaskStatus.running)
             n_tasks_to_queue = min(
